@@ -1,15 +1,19 @@
 # ============================================================
-# charamin-overlay.ps1  ?? 完全版（.Path完全排除 / StrictMode-safe）
+# charamin-overlay.ps1 ?? 完全版（左半分問題を自動補正 / StrictMode-safe）
 #
 # 仕様（固定）:
-#  - SetupScript は実行しない（変更不可＆.Path地雷回避）。検索ヒントのみ。
-#  - 背景（base / under）= 第2引数 mp4（OtherMP4）の退避コピー
-#  - オーバーレイ（top / over）= WorkDir から自動選択した mp4
-#  - どちらも必ず全画面（scale=1920x1080）で合成
-#  - 音声は auto（両方あればmix / 片方ならそれ）
-#  - BGM は add-BGM-<Mode>.ps1 が存在すれば実行（無ければスキップ）
-#  - ★ .Path プロパティはスクリプト内で一切使わない（完全排除）
-#  - 最後に必ず処理時間表示
+#  - SetupScript は実行しない（検索ヒントのみ）
+#  - 背景（base / under）= 第2引数 mp4（退避コピー）
+#  - オーバーレイ（top / over）= WorkDir から自動選択 mp4
+#  - ★オーバーレイが「左半分だけ前面」になる素材を自動判定して補正
+#     - 典型: 3840x1080, 2560x720 など横がほぼ2倍の動画
+#     - 自動で「左半分 crop → 1920x1080に拡大」
+#  - ★オーバーレイの繰り返し防止: eof_action=pass:repeatlast=0
+#  - 両方フルスクリーン（1920x1080）
+#  - 音声 auto（mix/base/top）
+#  - add-BGM-<Mode>.ps1 があれば実行
+#  - ★.Path を使わない
+#  - 最後に処理時間表示
 #
 # 実行:
 #   .\charamin-overlay.ps1 <SetupScript> <OtherMP4> <Mode> <Kind>
@@ -21,8 +25,6 @@ param(
   [Parameter(Mandatory=$true, Position=2)][string]$Mode,
   [Parameter(Mandatory=$true, Position=3)][string]$Kind,
 
-  [ValidateRange(0.0,1.0)][double]$Opacity = 0.55,
-
   [int]$W = 1920,
   [int]$H = 1080,
   [int]$FPS = 30,
@@ -31,6 +33,10 @@ param(
 
   [ValidateSet("auto","base","top","mix")]
   [string]$Audio = "auto",
+
+  # 横2倍素材のとき「左」か「右」どちらを採用するか
+  [ValidateSet("left","right")]
+  [string]$Half = "left",
 
   [switch]$NoBgm,
   [string]$BgmDir = "",
@@ -55,14 +61,19 @@ try {
     -not [string]::IsNullOrWhiteSpace(($o | Out-String).Trim())
   }
 
+  function GetVideoWH([string]$p){
+    $line = & ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x $p 2>$null
+    $s = ($line | Out-String).Trim()
+    if($s -notmatch '^\d+x\d+$'){ return @{w=0;h=0} }
+    $a = $s.Split('x')
+    return @{w=[int]$a[0]; h=[int]$a[1]}
+  }
+
   function InvokeBgm([string]$mode,[string]$video){
     if($NoBgm){ return }
-
-    # ★.Path 排除：既定ディレクトリは $PSCommandPath から算出
     if([string]::IsNullOrWhiteSpace($BgmDir)){
       $BgmDir = Split-Path -Parent $PSCommandPath
     }
-
     $bgm = Join-Path $BgmDir ("add-BGM-{0}.ps1" -f $mode)
     if(Test-Path -LiteralPath $bgm){
       Write-Host ""
@@ -73,19 +84,19 @@ try {
     }
   }
 
-  # ========= WorkDir =========
+  # ===== WorkDir =====
   if([string]::IsNullOrWhiteSpace($WorkDir)){
     $WorkDir = (Get-Location).ProviderPath
   }
   $work = NormPath $WorkDir
 
-  # ========= OtherVideo（背景） =========
+  # ===== OtherVideo（背景）=====
   if(-not (Test-Path -LiteralPath $OtherVideo)){
     throw "OtherVideo が見つかりません: $OtherVideo"
   }
   $otherOrig = NormPath $OtherVideo
 
-  # 消失対策：OtherVideo を退避コピー（背景はこのコピーを使う）
+  # 背景用に退避コピー（消失対策）
   $tmpDir = Join-Path (Get-Location) "_overlay_tmp"
   if(-not (Test-Path -LiteralPath $tmpDir)){
     New-Item -ItemType Directory -Path $tmpDir | Out-Null
@@ -94,11 +105,11 @@ try {
   $otherSafe = Join-Path $tmpDir ($stamp + "-" + [IO.Path]::GetFileName($otherOrig))
   Copy-Item -LiteralPath $otherOrig -Destination $otherSafe -Force
 
-  # ========= SetupScript は検索ヒント =========
+  # ===== SetupScript は検索ヒント =====
   $hint = [IO.Path]::GetFileNameWithoutExtension($SetupScriptPath)
-  $hint = ($hint -replace '^\d+-','')  # 11-xxx → xxx
+  $hint = ($hint -replace '^\d+-','')
 
-  # ========= WorkDir から overlay（上）を選ぶ =========
+  # ===== overlay 用 mp4 を WorkDir から選択 =====
   $all = Get-ChildItem -LiteralPath $work -File -Filter *.mp4 -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -ne $otherOrig -and $_.FullName -ne $otherSafe } |
     Sort-Object LastWriteTimeUtc -Descending
@@ -112,13 +123,20 @@ try {
     $picked = $all | Select-Object -First 1
   }
 
-  # ========= 上下関係（固定：逆にする） =========
-  # 背景（base）= 第2引数（退避コピー）
-  $base = $otherSafe
-  # オーバーレイ（top）= WorkDir 自動選択
-  $top  = $picked.FullName
+  # ===== 上下関係（固定）=====
+  $base = $otherSafe         # 背景 = 第2引数
+  $top  = $picked.FullName   # 上 = WorkDir 自動選択
 
-  # ========= 音声（auto） =========
+  # ===== top の「横2倍」自動判定 =====
+  $whTop = GetVideoWH $top
+  $needHalfCrop = $false
+
+  # 横がほぼ2倍、縦がほぼ同等なら「左右2枚」素材とみなす
+  if($whTop.w -ge ($W*2 - 32) -and $whTop.h -ge ($H - 32)){
+    $needHalfCrop = $true
+  }
+
+  # ===== 音声 =====
   $baseHas = HasAudio $base
   $topHas  = HasAudio $top
 
@@ -149,34 +167,43 @@ try {
     }
   }
 
-  # ========= 出力名 =========
+  # ===== 出力 =====
   if([string]::IsNullOrWhiteSpace($OutName)){
     $OutName = "$stamp-$Mode-$Kind-fullblend.mp4"
   }
   $out = Join-Path (Get-Location) $OutName
 
-  # ========= filter_complex（両方フルスクリーン保証） =========
-  $op = $Opacity.ToString([Globalization.CultureInfo]::InvariantCulture)
+  # ===== filter_complex =====
+  $bgChain = "[0:v]fps=${FPS},scale=${W}:${H},setsar=1[bg];"
 
-  # ★ ${W}:${H} で $W: 地雷回避
-  $vf = "[0:v]fps=${FPS},scale=${W}:${H},setsar=1[bg];" +
-        "[1:v]fps=${FPS},scale=${W}:${H},setsar=1,format=rgba,colorchannelmixer=aa=${op}[ov];" +
-        "[bg][ov]overlay=0:0[v]"
+  if($needHalfCrop){
+    # left or right
+    $x = "0"
+    if($Half -eq "right"){ $x = "iw/2" }
+
+    # 左右2枚素材 → 半分だけ切り出してから全画面化
+    $ovChain = "[1:v]crop=iw/2:ih:${x}:0,fps=${FPS},scale=${W}:${H},setsar=1,format=yuv420p[ov];"
+  } else {
+    $ovChain = "[1:v]fps=${FPS},scale=${W}:${H},setsar=1,format=yuv420p[ov];"
+  }
+
+  # ★繰り返し防止
+  $mixChain = "[bg][ov]overlay=0:0:eof_action=pass:repeatlast=0[v]"
+  $vf = $bgChain + $ovChain + $mixChain
   if($af){ $vf = "$vf;$af" }
 
   Write-Host ""
   Write-Host "===================="
   Write-Host "WorkDir     : $work"
   Write-Host "Hint        : $hint"
-  Write-Host "Base(under) : $base   (第2引数)"
-  Write-Host "Top(over)   : $top    (WorkDir自動選択)"
-  Write-Host "Opacity     : $Opacity"
+  Write-Host "Base(under) : $base"
+  Write-Host "Top(over)   : $top"
+  Write-Host "TopWH       : $($whTop.w)x$($whTop.h)  halfCrop=$needHalfCrop  half=$Half"
   Write-Host "Audio(mode) : $audioMode"
   Write-Host "Out         : $out"
   Write-Host "===================="
   Write-Host ""
 
-  Write-Host "ffmpeg 開始..."
   & ffmpeg -y `
     -i $base -i $top `
     -filter_complex $vf `
@@ -186,7 +213,6 @@ try {
     $out
 
   InvokeBgm $Mode $out
-
 }
 finally{
   $sw.Stop()
