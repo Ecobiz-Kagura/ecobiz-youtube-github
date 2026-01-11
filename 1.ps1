@@ -35,8 +35,12 @@ function Stamp([string]$msg){
 $CleanupExts = @(".srt",".mp3",".wav",".mp4")
 $DeleteOutputMp4 = $false   # 最終成果物MP4も消すなら $true
 
-# 後で finally でも参照する
+# ===== done 先 =====
+$DoneDir = "D:\ecobiz-youtube-github\done"
+
+# finally から参照する変数
 $outMp4 = $null
+$resolvedTextPath = $null
 
 try {
   # =========================
@@ -73,10 +77,10 @@ try {
   Assert-File $SetupScriptPath
   Assert-File $TextPath
 
-  $SetupScriptPath = (Resolve-Path $SetupScriptPath).Path
-  $TextPath        = (Resolve-Path $TextPath).Path
+  $SetupScriptPath   = (Resolve-Path $SetupScriptPath).Path
+  $resolvedTextPath  = (Resolve-Path $TextPath).Path
 
-  $txtLeaf = [IO.Path]::GetFileName($TextPath)
+  $txtLeaf = [IO.Path]::GetFileName($resolvedTextPath)
   $isShort = ($txtLeaf -match '(?i)short')
 
   # =========================
@@ -97,16 +101,15 @@ try {
   }
   Assert-File $BgmPs1
 
-  # uploader（joyuu のときだけ使う）
   if ($Upload -eq "joyuu") {
     Assert-File ".\uploader10-joyuu.py"
   }
 
   # =========================
-  # 出力 MP4（txt と同名）
+  # 出力 MP4
   # =========================
-  $txtBase = [IO.Path]::GetFileNameWithoutExtension($TextPath)
-  $txtDir  = Split-Path -Parent $TextPath
+  $txtBase = [IO.Path]::GetFileNameWithoutExtension($resolvedTextPath)
+  $txtDir  = Split-Path -Parent $resolvedTextPath
   $outMp4  = Join-Path $txtDir ($txtBase + ".mp4")
 
   # =========================
@@ -135,7 +138,7 @@ try {
   # TTS → overlay → BGM
   # =========================
   Stamp "=== TTS ==="
-  python $TtsPy $TextPath
+  python $TtsPy $resolvedTextPath
   Assert-File $outMp4
 
   Stamp "=== OVERLAY ==="
@@ -145,14 +148,11 @@ try {
   & $BgmPs1 $outMp4
 
   # =========================
-  # 追加：アップロード（joyuu）
+  # アップロード（joyuu のみ）
   # =========================
   if ($Upload -eq "joyuu") {
     Stamp "=== UPLOAD (joyuu) ==="
-    Stamp ("? python .\uploader10-joyuu.py {0}" -f $outMp4)
     python .\uploader10-joyuu.py $outMp4
-  } else {
-    Stamp "=== UPLOAD (none) ==="
   }
 
   Stamp "=== DONE ==="
@@ -161,13 +161,11 @@ try {
 }
 finally {
   # =========================
-  # 後片付け：処理終了時に .srt .mp3 .wav .mp4 を削除
-  #  - 作業ディレクトリは TextPath と同じフォルダに限定
-  #  - 最終成果物MP4は $DeleteOutputMp4 で制御（既定:残す）
+  # 後片付け（音声・字幕・中間MP4）
   # =========================
   try {
-    if ($TextPath) {
-      $workDir = Split-Path -Parent $TextPath
+    if ($resolvedTextPath) {
+      $workDir = Split-Path -Parent $resolvedTextPath
       Stamp "=== CLEANUP ==="
 
       foreach ($ext in $CleanupExts) {
@@ -187,6 +185,32 @@ finally {
     }
   } catch {
     Write-Warning ("cleanup failed: {0}" -f $_.Exception.Message)
+  }
+
+  # =========================
+  # テキストを done に移動
+  # =========================
+  try {
+    if ($resolvedTextPath -and (Test-Path -LiteralPath $resolvedTextPath)) {
+      if (-not (Test-Path -LiteralPath $DoneDir)) {
+        New-Item -ItemType Directory -Path $DoneDir -Force | Out-Null
+      }
+
+      $leaf = [IO.Path]::GetFileName($resolvedTextPath)
+      $dest = Join-Path $DoneDir $leaf
+
+      if (Test-Path -LiteralPath $dest) {
+        $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+        $base = [IO.Path]::GetFileNameWithoutExtension($leaf)
+        $ext  = [IO.Path]::GetExtension($leaf)
+        $dest = Join-Path $DoneDir ("{0}_{1}{2}" -f $base, $ts, $ext)
+      }
+
+      Stamp ("move txt -> done: {0}" -f (Split-Path -Leaf $dest))
+      Move-Item -LiteralPath $resolvedTextPath -Destination $dest -Force
+    }
+  } catch {
+    Write-Warning ("move txt failed: {0}" -f $_.Exception.Message)
   }
 
   $sw.Stop()
