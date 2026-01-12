@@ -1,228 +1,178 @@
-# ============================================================
-# charamin-overlay.ps1 ?? 完全版（左半分問題を自動補正 / StrictMode-safe）
+# =====================================================================
+# charamin-overlay.ps1（完全版 / PS5.1対応）
 #
-# 仕様（固定）:
-#  - SetupScript は実行しない（検索ヒントのみ）
-#  - 背景（base / under）= 第2引数 mp4（退避コピー）
-#  - オーバーレイ（top / over）= WorkDir から自動選択 mp4
-#  - ★オーバーレイが「左半分だけ前面」になる素材を自動判定して補正
-#     - 典型: 3840x1080, 2560x720 など横がほぼ2倍の動画
-#     - 自動で「左半分 crop → 1920x1080に拡大」
-#  - ★オーバーレイの繰り返し防止: eof_action=pass:repeatlast=0
-#  - 両方フルスクリーン（1920x1080）
-#  - 音声 auto（mix/base/top）
-#  - add-BGM-<Mode>.ps1 があれば実行
-#  - ★.Path を使わない
-#  - 最後に処理時間表示
+# 使い方:
+#   .\charamin-overlay.ps1 .\11-joyuu-takamine-hideko.ps1 .\xxxx_wide.mp4
 #
-# 実行:
-#   .\charamin-overlay.ps1 <SetupScript> <OtherMP4> <Mode> <Kind>
-# ============================================================
+# 挙動:
+#   1) SetupScript を実行して生成動画を作る
+#   2) wide(mp4) を背景（オーバーレイされる側 / base）
+#   3) 生成動画(mp4) をオーバーレイする側 / overlay（ループ）
+#   4) 出力は wide と同名で安全に上書き（tmp → Move）
+#
+# 重要:
+#   - 生成動画のパスは SetupScript 内の $finalOutPath を優先して取得
+#     見つからなければ SetupScript と同名 .mp4 をフォールバック
+#   - PowerShell 5.1 互換（?. 等は不使用）
+# =====================================================================
 
 param(
-  [Parameter(Mandatory=$true, Position=0)][string]$SetupScriptPath,
-  [Parameter(Mandatory=$true, Position=1)][string]$OtherVideo,
-  [Parameter(Mandatory=$true, Position=2)][string]$Mode,
-  [Parameter(Mandatory=$true, Position=3)][string]$Kind,
+  [Parameter(Mandatory=$true)][string]$SetupScriptPath,
+  [Parameter(Mandatory=$true)][string]$BaseMp4,   # ← wide を渡す（背景）
 
-  [int]$W = 1920,
-  [int]$H = 1080,
-  [int]$FPS = 30,
+  [double]$Opacity = 0.5,
+  [int]$OutW = 1920,
+  [int]$OutH = 1080,
 
-  [string]$WorkDir = "",
-
-  [ValidateSet("auto","base","top","mix")]
-  [string]$Audio = "auto",
-
-  # 横2倍素材のとき「左」か「右」どちらを採用するか
-  [ValidateSet("left","right")]
-  [string]$Half = "left",
-
-  [switch]$NoBgm,
-  [string]$BgmDir = "",
-
-  [string]$OutName = ""
+  # 生成待ち最大秒（無限待ち防止）
+  [int]$WaitSec = 1200
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
-$startedAt = Get-Date
+function Stamp([string]$msg){
+  $t = (Get-Date).ToString("HH:mm:ss")
+  Write-Host ("[{0}] {1}" -f $t, $msg)
+}
+function Assert-File([string]$p){
+  if (-not (Test-Path -LiteralPath $p)) { throw "Not found: $p" }
+}
+function Get-ToolPath([string]$name){
+  $cmd = Get-Command $name -ErrorAction SilentlyContinue
+  if (-not $cmd) { throw "$name not found in PATH" }
+  return $cmd.Source
+}
+function Get-DurationSec([string]$ffprobePath, [string]$mp4){
+  $s = & $ffprobePath -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $mp4
+  if (-not $s) { throw "Failed to get duration: $mp4" }
+  return [double]::Parse($s.Trim(), [System.Globalization.CultureInfo]::InvariantCulture)
+}
 
-try {
+function Try-GetFinalOutPathFromSetup([string]$ps1Path){
+  # $finalOutPath = "....mp4" の行を拾う（簡易）
+  # ※ あなたの setup はこの形式なのでこれで十分
+  $hit = Select-String -LiteralPath $ps1Path -Pattern '^\s*\$finalOutPath\s*=\s*"(.*\.mp4)"\s*$' -ErrorAction SilentlyContinue |
+         Select-Object -First 1
+  if ($hit) {
+    $m = [regex]::Match($hit.Line, '^\s*\$finalOutPath\s*=\s*"(.*\.mp4)"\s*$')
+    if ($m.Success) { return $m.Groups[1].Value }
+  }
+  return $null
+}
 
-  function NormPath([string]$p){
-    [string](Resolve-Path -LiteralPath $p -ErrorAction Stop)
+function Wait-ForFileStable([string]$path, [int]$waitSec){
+  # 存在するまで待つ → サイズが2回連続で同じになったら「書き込み完了」とみなす
+  $elapsed = 0
+  while (-not (Test-Path -LiteralPath $path)) {
+    Start-Sleep -Seconds 1
+    $elapsed++
+    if ($elapsed -ge $waitSec) { throw "Timeout: file not found after ${waitSec}s : $path" }
   }
 
-  function HasAudio([string]$p){
-    $o = & ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 $p 2>$null
-    -not [string]::IsNullOrWhiteSpace(($o | Out-String).Trim())
-  }
-
-  function GetVideoWH([string]$p){
-    $line = & ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x $p 2>$null
-    $s = ($line | Out-String).Trim()
-    if($s -notmatch '^\d+x\d+$'){ return @{w=0;h=0} }
-    $a = $s.Split('x')
-    return @{w=[int]$a[0]; h=[int]$a[1]}
-  }
-
-  function InvokeBgm([string]$mode,[string]$video){
-    if($NoBgm){ return }
-    if([string]::IsNullOrWhiteSpace($BgmDir)){
-      $BgmDir = Split-Path -Parent $PSCommandPath
-    }
-    $bgm = Join-Path $BgmDir ("add-BGM-{0}.ps1" -f $mode)
-    if(Test-Path -LiteralPath $bgm){
-      Write-Host ""
-      Write-Host "BGM実行: $bgm"
-      & $bgm $video
+  $last = -1
+  $same = 0
+  while ($true) {
+    $len = (Get-Item -LiteralPath $path).Length
+    if ($len -eq $last -and $len -gt 0) {
+      $same++
+      if ($same -ge 2) { break }   # 2秒連続で変化なし
     } else {
-      Write-Host "BGM: スキップ（見つからない）: $bgm"
+      $same = 0
+      $last = $len
     }
+    Start-Sleep -Seconds 1
+    $elapsed++
+    if ($elapsed -ge $waitSec) { throw "Timeout: file not stable after ${waitSec}s : $path" }
   }
-
-  # ===== WorkDir =====
-  if([string]::IsNullOrWhiteSpace($WorkDir)){
-    $WorkDir = (Get-Location).ProviderPath
-  }
-  $work = NormPath $WorkDir
-
-  # ===== OtherVideo（背景）=====
-  if(-not (Test-Path -LiteralPath $OtherVideo)){
-    throw "OtherVideo が見つかりません: $OtherVideo"
-  }
-  $otherOrig = NormPath $OtherVideo
-
-  # 背景用に退避コピー（消失対策）
-  $tmpDir = Join-Path (Get-Location) "_overlay_tmp"
-  if(-not (Test-Path -LiteralPath $tmpDir)){
-    New-Item -ItemType Directory -Path $tmpDir | Out-Null
-  }
-  $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-  $otherSafe = Join-Path $tmpDir ($stamp + "-" + [IO.Path]::GetFileName($otherOrig))
-  Copy-Item -LiteralPath $otherOrig -Destination $otherSafe -Force
-
-  # ===== SetupScript は検索ヒント =====
-  $hint = [IO.Path]::GetFileNameWithoutExtension($SetupScriptPath)
-  $hint = ($hint -replace '^\d+-','')
-
-  # ===== overlay 用 mp4 を WorkDir から選択 =====
-  $all = Get-ChildItem -LiteralPath $work -File -Filter *.mp4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -ne $otherOrig -and $_.FullName -ne $otherSafe } |
-    Sort-Object LastWriteTimeUtc -Descending
-
-  if(-not $all){
-    throw "WorkDir 内に overlay 候補 mp4 がありません: $work"
-  }
-
-  $picked = $all | Where-Object { $_.Name -like "*$hint*" } | Select-Object -First 1
-  if(-not $picked){
-    $picked = $all | Select-Object -First 1
-  }
-
-  # ===== 上下関係（固定）=====
-  $base = $otherSafe         # 背景 = 第2引数
-  $top  = $picked.FullName   # 上 = WorkDir 自動選択
-
-  # ===== top の「横2倍」自動判定 =====
-  $whTop = GetVideoWH $top
-  $needHalfCrop = $false
-
-  # 横がほぼ2倍、縦がほぼ同等なら「左右2枚」素材とみなす
-  if($whTop.w -ge ($W*2 - 32) -and $whTop.h -ge ($H - 32)){
-    $needHalfCrop = $true
-  }
-
-  # ===== 音声 =====
-  $baseHas = HasAudio $base
-  $topHas  = HasAudio $top
-
-  $audioMode = $Audio
-  if($Audio -eq "auto"){
-    if($baseHas -and $topHas){ $audioMode="mix" }
-    elseif($baseHas){ $audioMode="base" }
-    elseif($topHas){ $audioMode="top" }
-    else{ $audioMode="base" }
-  }
-
-  $af=$null
-  $mapA=@()
-  switch($audioMode){
-    "base" { $mapA=@("-map","0:a?") }
-    "top"  { $mapA=@("-map","1:a?") }
-    "mix"  {
-      if($baseHas -and $topHas){
-        $af="[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0[a]"
-        $mapA=@("-map","[a]")
-      } elseif($baseHas){
-        $mapA=@("-map","0:a?")
-      } elseif($topHas){
-        $mapA=@("-map","1:a?")
-      } else {
-        $mapA=@("-map","0:a?")
-      }
-    }
-  }
-
-  # ===== 出力 =====
-  if([string]::IsNullOrWhiteSpace($OutName)){
-    $OutName = "$stamp-$Mode-$Kind-fullblend.mp4"
-  }
-  $out = Join-Path (Get-Location) $OutName
-
-  # ===== filter_complex =====
-  $bgChain = "[0:v]fps=${FPS},scale=${W}:${H},setsar=1[bg];"
-
-  if($needHalfCrop){
-    # left or right
-    $x = "0"
-    if($Half -eq "right"){ $x = "iw/2" }
-
-    # 左右2枚素材 → 半分だけ切り出してから全画面化
-    $ovChain = "[1:v]crop=iw/2:ih:${x}:0,fps=${FPS},scale=${W}:${H},setsar=1,format=yuv420p[ov];"
-  } else {
-    $ovChain = "[1:v]fps=${FPS},scale=${W}:${H},setsar=1,format=yuv420p[ov];"
-  }
-
-  # ★繰り返し防止
-  $mixChain = "[bg][ov]overlay=0:0:eof_action=pass:repeatlast=0[v]"
-  $vf = $bgChain + $ovChain + $mixChain
-  if($af){ $vf = "$vf;$af" }
-
-  Write-Host ""
-  Write-Host "===================="
-  Write-Host "WorkDir     : $work"
-  Write-Host "Hint        : $hint"
-  Write-Host "Base(under) : $base"
-  Write-Host "Top(over)   : $top"
-  Write-Host "TopWH       : $($whTop.w)x$($whTop.h)  halfCrop=$needHalfCrop  half=$Half"
-  Write-Host "Audio(mode) : $audioMode"
-  Write-Host "Out         : $out"
-  Write-Host "===================="
-  Write-Host ""
-
-  & ffmpeg -y `
-    -i $base -i $top `
-    -filter_complex $vf `
-    -map "[v]" @mapA `
-    -c:v libx264 -pix_fmt yuv420p `
-    -c:a aac -movflags +faststart `
-    $out
-
-  InvokeBgm $Mode $out
 }
-finally{
-  $sw.Stop()
-  $e = $sw.Elapsed
-  $sec  = [math]::Round($e.TotalSeconds, 1)
-  $mmss = "{0:mm\:ss}" -f $e
-  Write-Host ""
-  Write-Host "========================="
-  Write-Host "開始時刻 : $startedAt"
-  Write-Host "終了時刻 : $(Get-Date)"
-  Write-Host "処理時間 : $sec 秒 ($mmss)"
-  Write-Host "========================="
+
+# ---- tools ----
+$ffmpeg  = Get-ToolPath "ffmpeg"
+$ffprobe = Get-ToolPath "ffprobe"
+
+# ---- normalize ----
+Assert-File $SetupScriptPath
+Assert-File $BaseMp4
+$SetupScriptPath = (Resolve-Path -LiteralPath $SetupScriptPath).Path
+$BaseMp4         = (Resolve-Path -LiteralPath $BaseMp4).Path
+
+# ---- opacity clamp ----
+if ($Opacity -lt 0) { $Opacity = 0 }
+if ($Opacity -gt 1) { $Opacity = 1 }
+
+Stamp ("setup  = {0}" -f $SetupScriptPath)
+Stamp ("base   = {0}" -f $BaseMp4)
+Stamp ("ffmpeg = {0}" -f $ffmpeg)
+Stamp ("ffprobe= {0}" -f $ffprobe)
+
+# ---- 1) run setup ----
+Stamp "RUN setup script..."
+& powershell -NoProfile -ExecutionPolicy Bypass -File $SetupScriptPath
+if ($LASTEXITCODE -ne 0) { throw "SetupScript failed. exitcode=$LASTEXITCODE" }
+
+# ---- 2) resolve overlay mp4 (generated) ----
+$overlayMp4 = Try-GetFinalOutPathFromSetup $SetupScriptPath
+if ([string]::IsNullOrWhiteSpace($overlayMp4)) {
+  $overlayMp4 = [IO.Path]::ChangeExtension($SetupScriptPath, ".mp4")
+  Stamp ("[WARN] $finalOutPath not found in setup. fallback overlay={0}" -f $overlayMp4)
+} else {
+  Stamp ("overlay from setup finalOutPath = {0}" -f $overlayMp4)
 }
+
+# ---- 3) wait for generated mp4 ----
+Stamp ("WAIT overlay mp4: {0}" -f $overlayMp4)
+Wait-ForFileStable -path $overlayMp4 -waitSec $WaitSec
+
+# ---- 4) duration by base(wide) ----
+$duration = Get-DurationSec -ffprobePath $ffprobe -mp4 $BaseMp4
+if ($duration -le 0) { throw "Invalid duration: $duration" }
+$durationStr = ("{0:0.###}" -f $duration)
+Stamp ("duration(base) = {0}s" -f $durationStr)
+
+# ---- 5) output: overwrite base safely (tmp -> move) ----
+$outDir = Split-Path -Parent $BaseMp4
+$outTmp = Join-Path $outDir ("tmp_overlay_{0}.mp4" -f (Get-Random))
+$outMp4 = $BaseMp4
+
+Stamp ("OUT(overwrite) = {0}" -f $outMp4)
+
+# ---- filter: input0=base(wide), input1=overlay(generated) ----
+$fc = "[1:v]scale=${OutW}:${OutH},format=rgba,colorchannelmixer=aa=${Opacity}[ovl];" +
+      "[0:v][ovl]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2:format=auto"
+
+# ---- run ffmpeg to tmp ----
+$args = @(
+  "-y",
+  "-i", $BaseMp4,
+  "-stream_loop", "-1",
+  "-i", $overlayMp4,
+  "-filter_complex", $fc,
+  "-map", "0:v:0",
+  "-map", "0:a?",
+  "-t", $durationStr,
+  "-c:v", "libx264",
+  "-pix_fmt", "yuv420p",
+  "-c:a", "aac",
+  "-movflags", "+faststart",
+  $outTmp
+)
+
+Stamp "RUN ffmpeg (tmp output)..."
+& $ffmpeg @args
+if ($LASTEXITCODE -ne 0) {
+  if (Test-Path -LiteralPath $outTmp) { Remove-Item -LiteralPath $outTmp -Force }
+  throw "ffmpeg failed. exitcode=$LASTEXITCODE"
+}
+if (-not (Test-Path -LiteralPath $outTmp)) { throw "ffmpeg tmp output missing: $outTmp" }
+
+# ---- atomic-ish replace ----
+Stamp "REPLACE base (overwrite)..."
+try {
+  Move-Item -LiteralPath $outTmp -Destination $outMp4 -Force
+} catch {
+  if (Test-Path -LiteralPath $outTmp) { Remove-Item -LiteralPath $outTmp -Force }
+  throw
+}
+
+Stamp "[OK] 完了"
