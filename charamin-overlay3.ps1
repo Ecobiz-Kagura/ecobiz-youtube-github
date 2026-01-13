@@ -1,9 +1,15 @@
 # =====================================================================
 # charamin-overlay2.ps1（1本完結/完全版/PS5.1対応）
-#  - 先頭で 最新wav+srt → wide(1920x1080) mp4 生成を内蔵（-MakeWide）
-#  - wide原本(__base)から毎回合成し、二重オーバーレイを防止
-#  - 音声は wide優先、無ければ生成動画
-#  - BGMモードで add-BGM-*.ps1 を任意実行
+#
+# 仕様:
+#  0) (任意) 最新 wav+srt から wide mp4 を作る（-MakeWide）
+#  1) SetupScript を実行して「生成動画(mp4)」を作る（overlay側）
+#  2) wide(mp4) は「背景（オーバーレイされる側）」：必ず wide原本(__base) から合成して二重を防止
+#  3) overlay(生成動画) をループして中央合成
+#  4) 最終出力 mp4 のファイル名は「今回処理したテキスト（基本は SRT）」と同名（拡張子だけ .mp4）
+#     ★ _wide は付けない
+#  5) BGMモードで add-BGM-*.ps1 を任意実行（同フォルダ）
+#  6) ★最後に必ず処理時間を表示（失敗しても finally で出る）
 #
 # 使い方:
 #   # 既存wideを使う
@@ -12,8 +18,11 @@
 #   # 先頭でwideを作る（カレントの最新 *.wav と *.srt から）
 #   .\charamin-overlay2.ps1 .\setup.ps1 "" epilogue -MakeWide
 #
-#   # wideの出力名を固定
-#   .\charamin-overlay2.ps1 .\setup.ps1 "" none -MakeWide -WideOutName "20260112_xxx_wide.mp4"
+#   # wide生成時の出力名を固定
+#   .\charamin-overlay2.ps1 .\setup.ps1 "" none -MakeWide -WideOutName "mywide.mp4"
+#
+#   # 字幕を少し大きく（例）
+#   .\charamin-overlay2.ps1 .\setup.ps1 "" epilogue -MakeWide -WideFontSize 15
 # =====================================================================
 
 param(
@@ -50,6 +59,12 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# =========================
+# 処理時間計測開始（必ず最後に表示）
+# =========================
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$startedAt = Get-Date
 
 function Stamp([string]$msg){
   $t = (Get-Date).ToString("HH:mm:ss")
@@ -159,6 +174,9 @@ function Invoke-MakeWideFromLatestWavSrt {
   if (-not $wav) { throw "wav が見つかりません（カレントに *.wav が必要）" }
   if (-not $srt) { throw "srt が見つかりません（カレントに *.srt が必要）" }
 
+  # ★今回処理したテキスト（字幕）を記録：最終mp4名の元になる
+  $script:UsedTextPath = $srt.FullName
+
   Stamp ("WAV: {0} ({1})" -f $wav.Name, $wav.LastWriteTime)
   Stamp ("SRT: {0} ({1})" -f $srt.Name, $srt.LastWriteTime)
 
@@ -204,123 +222,158 @@ function Invoke-MakeWideFromLatestWavSrt {
   return (Resolve-Path -LiteralPath $outPath).Path
 }
 
-# ---- tool paths ----
-$ffmpeg  = Get-ToolPath "ffmpeg"
-$ffprobe = Get-ToolPath "ffprobe"
+try {
+  # ---- tools ----
+  $ffmpeg  = Get-ToolPath "ffmpeg"
+  $ffprobe = Get-ToolPath "ffprobe"
 
-# ---- normalize input ----
-Assert-File $SetupScriptPath
-$SetupScriptPath = (Resolve-Path -LiteralPath $SetupScriptPath).Path
-$ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+  # ---- normalize ----
+  Assert-File $SetupScriptPath
+  $SetupScriptPath = (Resolve-Path -LiteralPath $SetupScriptPath).Path
+  $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# ---- clamp ----
-if ($Opacity -lt 0) { $Opacity = 0 }
-if ($Opacity -gt 1) { $Opacity = 1 }
+  # ---- clamp ----
+  if ($Opacity -lt 0) { $Opacity = 0 }
+  if ($Opacity -gt 1) { $Opacity = 1 }
 
-# =====================================================================
-# 0) 先頭：wide生成（任意）
-# =====================================================================
-if ($MakeWide -or [string]::IsNullOrWhiteSpace($WideMp4)) {
-  Stamp "STEP0: make wide from latest wav+srt"
+  # =====================================================================
+  # 0) 先頭：wide生成（任意）
+  # =====================================================================
+  if ($MakeWide -or [string]::IsNullOrWhiteSpace($WideMp4)) {
+    Stamp "STEP0: make wide from latest wav+srt"
 
-  $WideMp4 = Invoke-MakeWideFromLatestWavSrt `
-    -OutName $WideOutName `
-    -Width $WideW -Height $WideH -Fps $WideFps -BgColor $WideBgColor `
-    -FontSize $WideFontSize -Outline $WideOutline -Shadow $WideShadow -MarginV $WideMarginV `
-    -AudioKbps $WideAudioKbps
-} else {
-  Assert-File $WideMp4
-  $WideMp4 = (Resolve-Path -LiteralPath $WideMp4).Path
+    $WideMp4 = Invoke-MakeWideFromLatestWavSrt `
+      -OutName $WideOutName `
+      -Width $WideW -Height $WideH -Fps $WideFps -BgColor $WideBgColor `
+      -FontSize $WideFontSize -Outline $WideOutline -Shadow $WideShadow -MarginV $WideMarginV `
+      -AudioKbps $WideAudioKbps
+  } else {
+    Assert-File $WideMp4
+    $WideMp4 = (Resolve-Path -LiteralPath $WideMp4).Path
+
+    # 既存wideを使う場合でも、同名srtがあるならそれを採用（最終名の元）
+    $sameSrt = [IO.Path]::ChangeExtension($WideMp4, ".srt")
+    if (Test-Path -LiteralPath $sameSrt) {
+      $script:UsedTextPath = (Resolve-Path -LiteralPath $sameSrt).Path
+      Stamp ("TEXT: use same-name srt -> {0}" -f $script:UsedTextPath)
+    }
+  }
+
+  Stamp ("setup={0}" -f $SetupScriptPath)
+  Stamp ("wide ={0}" -f $WideMp4)
+  Stamp ("bgm  ={0}" -f $BgmMode)
+
+  # =====================================================================
+  # 1) 二重防止：wide原本を確保
+  # =====================================================================
+  $wideDir  = Split-Path -Parent $WideMp4
+  $wideName = [IO.Path]::GetFileNameWithoutExtension($WideMp4)
+  $wideExt  = [IO.Path]::GetExtension($WideMp4)
+  $wideBase = Join-Path $wideDir ($wideName + "__base" + $wideExt)
+
+  if (-not (Test-Path -LiteralPath $wideBase)) {
+    Stamp ("SAVE wide base -> {0}" -f $wideBase)
+    Copy-Item -LiteralPath $WideMp4 -Destination $wideBase -Force
+  } else {
+    Stamp ("USE wide base -> {0}" -f $wideBase)
+  }
+
+  # =====================================================================
+  # 2) SetupScript 実行（生成動画）
+  # =====================================================================
+  Stamp "STEP2: run setup..."
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $SetupScriptPath
+  if ($LASTEXITCODE -ne 0) { throw ("SetupScript failed. exitcode={0}" -f $LASTEXITCODE) }
+
+  $overlayMp4 = Try-GetFinalOutPathFromSetup $SetupScriptPath
+  if ([string]::IsNullOrWhiteSpace($overlayMp4)) {
+    $overlayMp4 = [IO.Path]::ChangeExtension($SetupScriptPath, ".mp4")
+    Stamp ("WARN: finalOutPath not found. fallback overlay={0}" -f $overlayMp4)
+  } else {
+    Stamp ("overlay(from setup)={0}" -f $overlayMp4)
+  }
+
+  Stamp ("WAIT overlay mp4: {0}" -f $overlayMp4)
+  Wait-ForFileStable -path $overlayMp4 -waitSec $WaitSec
+
+  # =====================================================================
+  # 3) オーバーレイ合成（wide原本に対して1回だけ）
+  # =====================================================================
+  $duration = Get-DurationSec -ffprobePath $ffprobe -mp4 $wideBase
+  $durationStr = ("{0:0.###}" -f $duration)
+
+  # ★最終出力名：処理したテキスト（基本はSRT）と同名（拡張子 .mp4）。_wide は付けない
+  $outMp4 = $WideMp4
+  if ($script:UsedTextPath) {
+    $bn = [IO.Path]::GetFileNameWithoutExtension($script:UsedTextPath)
+    $outMp4 = Join-Path $wideDir ($bn + ".mp4")
+    Stamp ("FINAL NAME from text: {0}" -f $outMp4)
+  } else {
+    Stamp "WARN: UsedTextPath not set. fallback to wide name."
+  }
+
+  $outTmp = Join-Path $wideDir ("tmp_overlay_{0}.mp4" -f (Get-Random))
+
+  $fc = ('[1:v]scale={0}:{1},format=rgba,colorchannelmixer=aa={2}[ovl];[0:v][ovl]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2:format=auto' -f $OutW,$OutH,$Opacity)
+
+  $baseHasAudio    = Has-Audio $ffprobe $wideBase
+  $overlayHasAudio = Has-Audio $ffprobe $overlayMp4
+  $audioMap = $null
+  if ($baseHasAudio) { $audioMap = "0:a:0"; Stamp "AUDIO: use wide base" }
+  elseif ($overlayHasAudio) { $audioMap = "1:a:0"; Stamp "AUDIO: use overlay(generated)" }
+  else { Stamp "AUDIO: none" }
+
+  $args = @(
+    "-y",
+    "-i", $wideBase,
+    "-stream_loop","-1",
+    "-i", $overlayMp4,
+    "-filter_complex", $fc,
+    "-map", "0:v:0"
+  )
+  if ($audioMap) { $args += @("-map", $audioMap) }
+
+  $args += @(
+    "-t", $durationStr,
+    "-c:v","libx264",
+    "-pix_fmt","yuv420p",
+    "-c:a","aac",
+    "-movflags","+faststart",
+    $outTmp
+  )
+
+  Stamp "STEP3: run ffmpeg overlay..."
+  & $ffmpeg @args
+  if ($LASTEXITCODE -ne 0) {
+    if (Test-Path -LiteralPath $outTmp) { Remove-Item -LiteralPath $outTmp -Force -ErrorAction SilentlyContinue }
+    throw ("ffmpeg failed. exitcode={0}" -f $LASTEXITCODE)
+  }
+
+  # 既存ファイルが同名で存在する場合も安全に上書き
+  if (Test-Path -LiteralPath $outMp4) {
+    Remove-Item -LiteralPath $outMp4 -Force -ErrorAction SilentlyContinue
+  }
+
+  Stamp ("STEP3: save -> {0}" -f $outMp4)
+  Move-Item -LiteralPath $outTmp -Destination $outMp4 -Force
+  Stamp "OK overlay done (single layer)"
+
+  # =====================================================================
+  # 4) BGM
+  # =====================================================================
+  Invoke-BgmScript -mode $BgmMode -targetMp4 $outMp4 -scriptRoot $ScriptRoot
+  Stamp "DONE"
 }
+finally {
+  $sw.Stop()
+  $elapsed = $sw.Elapsed
+  $totalSec = [math]::Round($elapsed.TotalSeconds, 1)
+  $mmss = "{0:mm\:ss}" -f $elapsed
 
-Stamp ("setup={0}" -f $SetupScriptPath)
-Stamp ("wide ={0}" -f $WideMp4)
-Stamp ("bgm  ={0}" -f $BgmMode)
-
-# =====================================================================
-# 1) 二重防止：wide原本を確保
-# =====================================================================
-$wideDir  = Split-Path -Parent $WideMp4
-$wideName = [IO.Path]::GetFileNameWithoutExtension($WideMp4)
-$wideExt  = [IO.Path]::GetExtension($WideMp4)
-$wideBase = Join-Path $wideDir ($wideName + "__base" + $wideExt)
-
-if (-not (Test-Path -LiteralPath $wideBase)) {
-  Stamp ("SAVE wide base -> {0}" -f $wideBase)
-  Copy-Item -LiteralPath $WideMp4 -Destination $wideBase -Force
-} else {
-  Stamp ("USE wide base -> {0}" -f $wideBase)
+  Write-Host ""
+  Write-Host "========================="
+  Write-Host ("開始時刻 : {0}" -f $startedAt)
+  Write-Host ("終了時刻 : {0}" -f (Get-Date))
+  Write-Host ("処理時間 : {0} 秒 ({1})" -f $totalSec, $mmss)
+  Write-Host "========================="
 }
-
-# =====================================================================
-# 2) SetupScript 実行（生成動画）
-# =====================================================================
-Stamp "STEP2: run setup..."
-& powershell -NoProfile -ExecutionPolicy Bypass -File $SetupScriptPath
-if ($LASTEXITCODE -ne 0) { throw ("SetupScript failed. exitcode={0}" -f $LASTEXITCODE) }
-
-$overlayMp4 = Try-GetFinalOutPathFromSetup $SetupScriptPath
-if ([string]::IsNullOrWhiteSpace($overlayMp4)) {
-  $overlayMp4 = [IO.Path]::ChangeExtension($SetupScriptPath, ".mp4")
-  Stamp ("WARN: finalOutPath not found. fallback overlay={0}" -f $overlayMp4)
-} else {
-  Stamp ("overlay(from setup)={0}" -f $overlayMp4)
-}
-
-Stamp ("WAIT overlay mp4: {0}" -f $overlayMp4)
-Wait-ForFileStable -path $overlayMp4 -waitSec $WaitSec
-
-# =====================================================================
-# 3) オーバーレイ合成（wide原本に対して1回だけ）
-# =====================================================================
-$duration = Get-DurationSec -ffprobePath $ffprobe -mp4 $wideBase
-$durationStr = ("{0:0.###}" -f $duration)
-
-$outTmp = Join-Path $wideDir ("tmp_overlay_{0}.mp4" -f (Get-Random))
-$outMp4 = $WideMp4
-
-$fc = ('[1:v]scale={0}:{1},format=rgba,colorchannelmixer=aa={2}[ovl];[0:v][ovl]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2:format=auto' -f $OutW,$OutH,$Opacity)
-
-$baseHasAudio    = Has-Audio $ffprobe $wideBase
-$overlayHasAudio = Has-Audio $ffprobe $overlayMp4
-
-$audioMap = $null
-if ($baseHasAudio) { $audioMap = "0:a:0"; Stamp "AUDIO: use wide base" }
-elseif ($overlayHasAudio) { $audioMap = "1:a:0"; Stamp "AUDIO: use overlay(generated)" }
-else { Stamp "AUDIO: none" }
-
-$args = @(
-  "-y",
-  "-i", $wideBase,
-  "-stream_loop","-1",
-  "-i", $overlayMp4,
-  "-filter_complex", $fc,
-  "-map", "0:v:0"
-)
-if ($audioMap) { $args += @("-map", $audioMap) }
-
-$args += @(
-  "-t", $durationStr,
-  "-c:v","libx264",
-  "-pix_fmt","yuv420p",
-  "-c:a","aac",
-  "-movflags","+faststart",
-  $outTmp
-)
-
-Stamp "STEP3: run ffmpeg overlay..."
-& $ffmpeg @args
-if ($LASTEXITCODE -ne 0) {
-  if (Test-Path -LiteralPath $outTmp) { Remove-Item -LiteralPath $outTmp -Force -ErrorAction SilentlyContinue }
-  throw ("ffmpeg failed. exitcode={0}" -f $LASTEXITCODE)
-}
-
-Stamp "STEP3: replace wide..."
-Move-Item -LiteralPath $outTmp -Destination $outMp4 -Force
-Stamp "OK overlay done (single layer)"
-
-# =====================================================================
-# 4) BGM
-# =====================================================================
-Invoke-BgmScript -mode $BgmMode -targetMp4 $outMp4 -scriptRoot $ScriptRoot
-Stamp "DONE"
