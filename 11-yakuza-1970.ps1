@@ -3,15 +3,25 @@
 #  - 1st insert around t=$FirstInsertSec
 #  - then every $InsertMinSec-$InsertMaxSec (random)
 #  - each insert: $InsertClipLen sec from random mp4 (no audio, random start)
-#  - PNG dir auto-detected by scanning D:\images_for_slide_show
+#  - Image dir auto-detected by scanning D:\images_for_slide_show (uses ALL image files, any ext)
 #  - Video dir "動画" found without Japanese literal (Unicode code points)
 #  - StrictMode-safe
 #
-# ★黒画面（たまに静止画/動画が真っ黒）対策を完全反映：
+# ★黒画面対策（完全反映）：
 #   1) 最終 concat を -c copy しない（再エンコードしてPTSを正規化）
 #   2) クリップ切り出しの -ss を input の後ろへ（GOP途中問題を回避）
 #   3) 画像セグメント/クリップ生成でFPSを固定（フレーム欠落区間を作らない）
 #   4) セグメント分割の「次回挿入点」を timeAfter 基準に修正（微ズレ防止）
+#
+# ★要件：
+#   最終的に残るのは $finalOutPath のみ
+#   （作業ファイルは最後に削除、失敗時も残さない）
+#
+# ★今回の修正（完全版）：
+#   - 画像順を毎回確実にシャッフル（Randomインスタンスで Next()）
+#   - StrictModeで落ちる「単一要素で配列が潰れる」問題を @() で常に回避
+#   - 拡張子偽装を廃止（.jpg を .png としてリンクしない）→ 黒画面回避
+#   - stage 側は 000001 + 元拡張子 で連番（ASCII化）し、concat の file 参照を正しく
 # ==============================
 
 Set-StrictMode -Version Latest
@@ -20,32 +30,32 @@ $ErrorActionPreference = "Stop"
 # --- Parameters ---
 $MinDurationSec   = 3
 $MaxDurationSec   = 6
-$ImagesPerVideo   = 150
-$VideoCount       = 1
 
-#$FirstInsertSec   = 10
-#$InsertMinSec     = 30
-#$InsertMaxSec     = 40
-#$InsertClipLen    = 7
+$ImagesPerVideo   = 150   # 残してもOK（未使用）
+$VideoCount       = 1
 
 $FirstInsertSec   = 6
 $InsertMinSec     = 10
 $InsertMaxSec     = 15
 $InsertClipLen    = 7
 
-# 追加：動画化時のFPS（固定）
+# FPS固定
 $Fps = 30
 
 # --- Settings ---
 $rootDir    = "D:\images_for_slide_show"
-$hintRegex  = "じょゆう-たかみねひでこ"    # 正規表現。合わない/文字化けするなら ""（png最多を採用）
-$outName    = "10-takamine-hideko.mp4"
+$hintRegex  = "やくざ-1970"   # 合わない/文字化けするなら ""（画像最多を採用）
 
-$ffmpegPath  = ".\ffmpeg.exe"
-$ffprobePath = ".\ffprobe.exe"
+# 対象画像拡張子（必要なら追加）
+$ImageExts = @(".png",".jpg",".jpeg",".webp",".bmp",".gif",".tif",".tiff")
 
-$storageMovieDir   = "D:\【エコビズ】\動画保管"
-$storageHanashiDir = "D:\【エコビズ】\話の特集"
+# ★最終成果物（これだけ残す）
+$finalOutPath = "D:\ecobiz-youtube-github\11-yakuza-1970.mp4"
+
+# ffmpeg/ffprobe の場所（このスクリプトと同じフォルダ想定）
+$ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ffmpegPath  = Join-Path $ScriptRoot "ffmpeg.exe"
+$ffprobePath = Join-Path $ScriptRoot "ffprobe.exe"
 
 # --- Helpers ---
 function Get-RandomDuration {
@@ -67,7 +77,6 @@ function Stage-ImageAscii {
     catch { Copy-Item -LiteralPath $SourcePath -Destination $DestPath -Force }
 }
 
-# 配列引数で ffprobe（日本語パスでも安全）
 function Get-VideoDurationSec {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -112,7 +121,16 @@ if (-not (Test-Path -LiteralPath $ffmpegPath))  { throw "ffmpeg not found: $ffmp
 if (-not (Test-Path -LiteralPath $ffprobePath)) { throw "ffprobe not found: $ffprobePath" }
 if (-not (Test-Path -LiteralPath $rootDir))     { throw "root not found: $rootDir" }
 
-# --- Find PNG directory candidates (ALWAYS array) ---
+# --- Ensure output directory exists ---
+$finalDir = Split-Path -Parent $finalOutPath
+if (-not (Test-Path -LiteralPath $finalDir)) {
+    New-Item -ItemType Directory -Path $finalDir -Force | Out-Null
+}
+
+# 生成は一旦テンポラリに出して、最後に Move で確定（失敗時に最終ファイルを残さない）
+$finalTmpOut = Join-Path $finalDir ("tmp_build_{0}.mp4" -f (Get-Random))
+
+# --- Find Image directory candidates (ALWAYS array) ---
 $allDirs = Get-ChildItem -LiteralPath $rootDir -Directory -Recurse -ErrorAction SilentlyContinue
 
 if ([string]::IsNullOrWhiteSpace($hintRegex)) {
@@ -123,67 +141,73 @@ if ([string]::IsNullOrWhiteSpace($hintRegex)) {
 
 $candidates = @(
     $filtered | ForEach-Object {
-        $pngCount = (
+        $imgCount = (
             Get-ChildItem -LiteralPath $_.FullName -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension -match '^\.(png|PNG)$' } |
+            Where-Object { $ImageExts -contains $_.Extension.ToLowerInvariant() } |
             Measure-Object
         ).Count
-        if ($pngCount -gt 0) {
-            [pscustomobject]@{ Dir = $_.FullName; Png = $pngCount }
+        if ($imgCount -gt 0) {
+            [pscustomobject]@{ Dir = $_.FullName; Img = $imgCount }
         }
     }
 )
 
-if ($candidates.Count -eq 0) {
-    throw "PNG folder not found under root. root=$rootDir hint=$hintRegex"
+if (@($candidates).Count -eq 0) {
+    throw "Image folder not found under root. root=$rootDir hint=$hintRegex"
 }
 
-$candidates = $candidates | Sort-Object Png -Descending
-$pngDir = $candidates[0].Dir
+$candidates = $candidates | Sort-Object Img -Descending
+$imgDir = $candidates[0].Dir
 
-# --- Find video dir named "動画" under pngDir ---
-$videoDir = Get-ChildItem -LiteralPath $pngDir -Directory -ErrorAction SilentlyContinue |
+# --- Find video dir named "動画" under imgDir ---
+$videoDir = Get-ChildItem -LiteralPath $imgDir -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq $folderDouga } |
             Select-Object -First 1 -ExpandProperty FullName
 
-if (-not $videoDir) { throw "video folder not found: $pngDir\$folderDouga" }
+if (-not $videoDir) { throw "video folder not found: $imgDir\$folderDouga" }
 
-# --- Load inputs ---
-$allPng = @(
-    Get-ChildItem -LiteralPath $pngDir -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Extension -match '^\.(png|PNG)$' }
+# --- Load inputs (ALL images) ---
+$allImages = @(
+    Get-ChildItem -LiteralPath $imgDir -File -ErrorAction SilentlyContinue |
+    Where-Object { $ImageExts -contains $_.Extension.ToLowerInvariant() }
 )
-if ($allPng.Count -eq 0) { throw "PNG not found: $pngDir" }
+if (@($allImages).Count -eq 0) { throw "Images not found: $imgDir" }
 
 $allVideos = @(
     Get-ChildItem -LiteralPath $videoDir -Filter "*.mp4" -File -ErrorAction SilentlyContinue
 )
-if ($allVideos.Count -eq 0) { throw "MP4 not found: $videoDir" }
+if (@($allVideos).Count -eq 0) { throw "MP4 not found: $videoDir" }
 
-$useCount = [Math]::Min($ImagesPerVideo, $allPng.Count)
+# ★全部使う
+$useCount = @($allImages).Count
 
-Write-Host "PNG:  $pngDir"
+Write-Host "IMG:  $imgDir"
 Write-Host "MP4:  $videoDir"
-Write-Host "PNG count: $($allPng.Count) / use: $useCount"
-Write-Host "MP4 count: $($allVideos.Count)"
+Write-Host "IMG count: $(@($allImages).Count) / use: $useCount"
+Write-Host "MP4 count: $(@($allVideos).Count)"
 Write-Host "FPS: $Fps"
+Write-Host "FINAL: $finalOutPath"
 
-# --- Work in D:\ ---
+# --- Work in D:\ (作業用ファイル置き場) ---
+$origLocation = (Get-Location).Path
 Set-Location D:\
-
-$outPath = Join-Path "D:\" $outName
-if (Test-Path -LiteralPath $outPath) { Remove-Item -LiteralPath $outPath -Force }
 
 $segmentFiles   = @()
 $clipFiles      = @()
 $tempStageDirs  = @()
 $tempConcatTxts = @()
-$tempFile       = $null
+
+$moveCompleted = $false
 
 try {
     for ($v = 0; $v -lt $VideoCount; $v++) {
 
-        $randomFiles = $allPng | Get-Random -Count $useCount
+        # ==========================
+        # ★毎回必ず変わるシャッフル（Get-Random依存を減らす）
+        # ==========================
+        $seed = [int]([DateTime]::UtcNow.Ticks % [int]::MaxValue)
+        $rng  = [System.Random]::new($seed)
+        $randomFiles = $allImages | Sort-Object { $rng.Next() }
 
         $currentTime     = 0
         $nextInsertPoint = $FirstInsertSec
@@ -193,8 +217,6 @@ try {
 
         foreach ($f in $randomFiles) {
             $dur = Get-RandomDuration
-
-            # ★黒画面対策/ズレ対策：この1枚を含めた時刻を基準にする
             $timeAfter = $currentTime + $dur
 
             if (($currentSegment.Count -gt 0) -and ($timeAfter -ge $nextInsertPoint)) {
@@ -209,13 +231,14 @@ try {
         }
         if ($currentSegment.Count -gt 0) { $segments += ,@($currentSegment) }
 
-        Write-Host "Segments: $($segments.Count)"
+        Write-Host "Segments: $(@($segments).Length)"
 
         $finalConcatTxt = New-TempTxtPath
         $tempConcatTxts += $finalConcatTxt
         $masterLines = @()
 
-        for ($i = 0; $i -lt $segments.Count; $i++) {
+        # ★StrictMode安全：必ず配列化して Length を使う
+        for ($i = 0; $i -lt @($segments).Length; $i++) {
 
             $seg = $segments[$i]
 
@@ -225,18 +248,27 @@ try {
 
             $segLines = @()
             $idx = 1
+            $lastPath = $null
+
             foreach ($pair in $seg) {
                 $img = $pair[0]
                 $dur = $pair[1]
-                $name = "{0:D6}.png" -f $idx
+
+                # ★拡張子偽装しない：元拡張子のまま連番（ASCII安全）
+                $ext = $img.Extension.ToLowerInvariant()
+                if ($ext -eq ".jpeg") { $ext = ".jpg" }
+
+                $name = "{0:D6}{1}" -f $idx, $ext
                 $dst  = Join-Path $stageDir $name
                 Stage-ImageAscii -SourcePath $img.FullName -DestPath $dst
+
                 $segLines += "file '$dst'"
                 $segLines += "duration $dur"
+                $lastPath = $dst
                 $idx++
             }
-            $lastName = "{0:D6}.png" -f ($idx - 1)
-            $lastPath = Join-Path $stageDir $lastName
+
+            if (-not $lastPath) { throw "segment has no images (index=$i)" }
             $segLines += "file '$lastPath'"
 
             $segConcatTxt = New-TempTxtPath
@@ -248,7 +280,6 @@ try {
 
             Write-Host "Segment #$i -> $segMp4"
 
-            # ★黒画面対策：FPS固定 + PTS安定化（再エンコード）
             & $ffmpegPath -y -safe 0 -f concat -i "$segConcatTxt" `
                 -r $Fps `
                 -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" `
@@ -257,7 +288,7 @@ try {
             if (-not (Test-Path -LiteralPath $segMp4)) { throw "segment failed: $segMp4" }
             $masterLines += "file '$segMp4'"
 
-            if ($i -lt $segments.Count - 1) {
+            if ($i -lt (@($segments).Length - 1)) {
                 $rndVideo = $allVideos | Get-Random
 
                 $clipPath = ("D:\clip_{0}.mp4" -f (Get-Random))
@@ -269,7 +300,7 @@ try {
 
                 Write-Host "Clip -> $clipPath (ss=$ss) src=$($rndVideo.FullName)"
 
-                # ★黒画面対策：-ss を input の後ろへ（GOP途中からの破綻を避ける）
+                # ★-ss を input の後ろへ（GOP途中対策）
                 & $ffmpegPath -y -i "$($rndVideo.FullName)" -ss $ss -t $InsertClipLen -an `
                     -r $Fps `
                     -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" `
@@ -283,42 +314,53 @@ try {
         Write-ListFileUtf8NoBom -Path $finalConcatTxt -Lines $masterLines
         if (-not (Test-Path -LiteralPath $finalConcatTxt)) { throw "concat list missing: $finalConcatTxt" }
 
-        Write-Host "Concat(re-encode) -> $outPath"
+        Write-Host "Concat(re-encode) -> $finalTmpOut"
 
-        # ★最重要：-c copy をやめて再エンコード（PTS/DTS/キーフレーム不整合を潰す）
+        if (Test-Path -LiteralPath $finalTmpOut) {
+            Remove-Item -LiteralPath $finalTmpOut -Force -ErrorAction SilentlyContinue
+        }
+
         & $ffmpegPath -y -safe 0 -f concat -i "$finalConcatTxt" `
             -r $Fps `
             -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" `
-            -c:v libx264 -pix_fmt yuv420p "$outPath"
+            -c:v libx264 -pix_fmt yuv420p "$finalTmpOut"
 
-        if (-not (Test-Path -LiteralPath $outPath)) { throw "final output missing: $outPath" }
-
-        $tempFile = ("D:\temp_{0}_{1}.mp4" -f ($outName.Replace('.','_')), (Get-Random))
-        Copy-Item -LiteralPath $outPath -Destination $tempFile -Force
-        Write-Host "Temp -> $tempFile"
+        if (-not (Test-Path -LiteralPath $finalTmpOut)) {
+            throw "final tmp output missing: $finalTmpOut"
+        }
     }
 
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    if (-not (Test-Path -LiteralPath $storageMovieDir))   { New-Item -ItemType Directory -Path $storageMovieDir -Force | Out-Null }
-    if (-not (Test-Path -LiteralPath $storageHanashiDir)) { New-Item -ItemType Directory -Path $storageHanashiDir -Force | Out-Null }
+    # ★最終成果物だけ残す：既存を消してから Move
+    if (Test-Path -LiteralPath $finalOutPath) {
+        Remove-Item -LiteralPath $finalOutPath -Force
+    }
+    Move-Item -LiteralPath $finalTmpOut -Destination $finalOutPath -Force
+    $moveCompleted = $true
 
-    Copy-Item -LiteralPath $tempFile -Destination (Join-Path $storageMovieDir   "$timestamp-$outName") -Force
-    Copy-Item -LiteralPath $tempFile -Destination (Join-Path $storageHanashiDir "$timestamp-$outName") -Force
-    Write-Host "Saved."
+    Write-Host "Saved: $finalOutPath"
+
+    try { Set-Location "D:\ecobiz-youtube-github\" } catch { }
+
 }
 finally {
+    # 失敗時は成果物も残さない
+    if (-not $moveCompleted) {
+        if ($finalTmpOut -and (Test-Path -LiteralPath $finalTmpOut)) {
+            Remove-Item -LiteralPath $finalTmpOut -Force -ErrorAction SilentlyContinue
+        }
+        if ($finalOutPath -and (Test-Path -LiteralPath $finalOutPath)) {
+            Remove-Item -LiteralPath $finalOutPath -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        if ($finalTmpOut -and (Test-Path -LiteralPath $finalTmpOut)) {
+            Remove-Item -LiteralPath $finalTmpOut -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     foreach ($t in $tempConcatTxts) { if ($t -and (Test-Path -LiteralPath $t)) { Remove-Item -LiteralPath $t -Force -ErrorAction SilentlyContinue } }
     foreach ($s in $segmentFiles)   { if ($s -and (Test-Path -LiteralPath $s)) { Remove-Item -LiteralPath $s -Force -ErrorAction SilentlyContinue } }
     foreach ($c in $clipFiles)      { if ($c -and (Test-Path -LiteralPath $c)) { Remove-Item -LiteralPath $c -Force -ErrorAction SilentlyContinue } }
     foreach ($d in $tempStageDirs)  { if ($d -and (Test-Path -LiteralPath $d)) { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue } }
-}
 
-Set-Location "D:\ecobiz-youtube-github"
-& "D:\ecobiz-youtube-github\3x.ps1"
-
-# ワイルドカードを使うので -LiteralPath は使わない
-$srcGlob  = "D:\ecobiz-images\*.mp4"
-$srcFiles = Get-ChildItem $srcGlob -ErrorAction SilentlyContinue
-if ($srcFiles) {
-    Copy-Item $srcGlob "D:\ecobiz-youtube-github" -Force
+    try { Set-Location $origLocation } catch { }
 }

@@ -1,12 +1,14 @@
 # =====================================================================
-# overlay11.ps1（完全版：dark / light を引数化）
+# overlay11.ps1（完全版：dark / light を引数化・フォルダ先頭集約）
+# 実行形式は変更しない：
+#   .\overlay11.ps1 -OverlayTheme dark -OverlayFrom left
 # =====================================================================
 
 param(
   # 背景動画（省略可：カレント直下の最新動画）
   [string]$BackgroundVideoPath,
 
-  # オーバーレイ動画（省略可：Theme+From で自動取得）
+  # オーバーレイ動画（省略可：自動選択）
   [string]$OverlayVideoPath,
 
   # ★テーマ（dark / light）
@@ -17,7 +19,7 @@ param(
   [ValidateSet("left","right","center")]
   [string]$OverlayFrom = "left",
 
-  # オーバーレイルート（テーマの親）
+  # 互換用（使わなくてもよい）
   [string]$OverlayRootBase = "D:\images_for_slide_show",
 
   # 左上マージン(px)
@@ -33,11 +35,23 @@ param(
 
   # 最新背景の検索対象拡張子
   [string[]]$BackgroundExts = @("*.mp4","*.mov","*.mkv","*.webm")
-
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# =====================================================
+# ★ オーバーレイ動画フォルダ設定（ここだけ見れば分かる）
+# =====================================================
+$OverlayFolderMap = @{
+    "dark-left"   = "D:\images_for_slide_show\MP4s-dark\left"
+    "dark-right"  = "D:\images_for_slide_show\MP4s-dark\right"
+    "dark-center" = "D:\images_for_slide_show\MP4s-dark\center"
+
+    "light-left"   = "D:\images_for_slide_show\MP4s-light\left"
+    "light-right"  = "D:\images_for_slide_show\MP4s-light\right"
+    "light-center" = "D:\images_for_slide_show\MP4s-light\center"
+}
 
 # ========= タイマー =========
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -50,7 +64,7 @@ function Assert-File([string]$p){
   if (-not (Test-Path -LiteralPath $p)) { throw ("Not found: {0}" -f $p) }
 }
 
-# foreach → 変数 → パイプ（ParserError 回避）
+# 最新動画（カレント直下）
 function Get-LatestVideoInCwd([string[]]$exts){
   $cwd = (Get-Location).Path
   $files = foreach ($e in $exts) {
@@ -59,17 +73,30 @@ function Get-LatestVideoInCwd([string[]]$exts){
   $files | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
+# オーバーレイ動画取得（先頭Map優先／完全互換fallbackあり）
 function Pick-RandomOverlay([string]$base, [string]$theme, [string]$from){
-  $root = Join-Path $base ("MP4s-{0}" -f $theme)
-  $dir  = Join-Path $root $from
+
+  $key = "$theme-$from"
+
+  if ($OverlayFolderMap.ContainsKey($key)) {
+    $dir = $OverlayFolderMap[$key]
+  }
+  else {
+    # 旧来方式（互換）
+    $root = Join-Path $base ("MP4s-{0}" -f $theme)
+    $dir  = Join-Path $root $from
+  }
+
   if (-not (Test-Path -LiteralPath $dir)) {
     throw "オーバーレイ取得先が見つかりません: $dir"
   }
-  $cands = Get-ChildItem -LiteralPath $dir -File -Filter *.mp4 -ErrorAction SilentlyContinue
-  if (-not $cands -or $cands.Count -eq 0) {
+
+  $cands = Get-ChildItem -LiteralPath $dir -File -Filter *.mp4
+  if (-not $cands) {
     throw "オーバーレイ動画がありません: $dir"
   }
-  ($cands | Get-Random).FullName
+
+  return ($cands | Get-Random).FullName
 }
 
 try {
@@ -81,7 +108,7 @@ try {
   if ([string]::IsNullOrWhiteSpace($BackgroundVideoPath)) {
     $latest = Get-LatestVideoInCwd -exts $BackgroundExts
     if (-not $latest) {
-      throw "カレントディレクトリに動画がありません: $((Get-Location).Path)"
+      throw "カレントディレクトリに動画がありません"
     }
     $BackgroundVideoPath = $latest.FullName
     Stamp "背景動画（自動）: $BackgroundVideoPath"
@@ -101,7 +128,7 @@ try {
   Assert-File $OverlayVideoPath
   $ov = (Resolve-Path -LiteralPath $OverlayVideoPath).Path
 
-  # ===== バックアップ（入力はバックアップ、出力は元名）=====
+  # ===== バックアップ =====
   $dir  = Split-Path $bg -Parent
   $base = [IO.Path]::GetFileNameWithoutExtension($bg)
   $ext  = [IO.Path]::GetExtension($bg)
@@ -111,7 +138,7 @@ try {
   Copy-Item -LiteralPath $bg -Destination $backup -Force
   Stamp "バックアップ作成: $backup"
 
-  # ===== filter_complex（正方形に引き伸ばし）=====
+  # ===== filter_complex =====
   $filter =
     ("[1:v][0:v]scale2ref=w=main_w*{0}:h=main_w*{0}[ovl][base];" -f $OverlayRatio) +
     ("[ovl]format=yuva420p,colorchannelmixer=aa={0}[ovla];" -f $OverlayAlpha) +
@@ -131,6 +158,18 @@ try {
     "-movflags","+faststart",
     $bg
   )
+
+  # 実行前確認（overlay11.ps1 のみ）
+  $cmdPreview = 'ffmpeg ' + ($ffArgs | ForEach-Object {
+    if ($_ -match '\s') { '"' + ($_ -replace '"','\"') + '"' } else { $_ }
+  } -join ' ')
+  Write-Host ""
+  Write-Host "[CONFIRM] 実行コマンド:"
+  Write-Host $cmdPreview
+  $ans = Read-Host "このまま実行しますか？ (y/N)"
+  if ($ans -notin @("y","Y","yes","YES")) {
+    throw "ユーザーがキャンセルしました"
+  }
 
   Stamp "ffmpeg 開始（出力は元と同名）"
   $p = Start-Process -NoNewWindow -PassThru -Wait -FilePath "ffmpeg" -ArgumentList $ffArgs

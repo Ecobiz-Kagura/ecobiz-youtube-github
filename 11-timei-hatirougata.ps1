@@ -44,13 +44,13 @@ $Fps = 30
 
 # --- Settings ---
 $rootDir    = "D:\images_for_slide_show"
-$hintRegex  = "じょゆう-たかみねひでこ"   # 合わない/文字化けするなら ""（画像最多を採用）
+$hintRegex  = "ちめい-八郎潟"   # 合わない/文字化けするなら ""（画像最多を採用）
 
 # 対象画像拡張子（必要なら追加）
 $ImageExts = @(".png",".jpg",".jpeg",".webp",".bmp",".gif",".tif",".tiff")
 
 # ★最終成果物（これだけ残す）
-$finalOutPath = "D:\ecobiz-youtube-github\11-joyuu-takamine-hideko.mp4"
+$finalOutPath = "D:\ecobiz-youtube-github\11-timei-hatirougata.mp4"
 
 # ffmpeg/ffprobe の場所（このスクリプトと同じフォルダ想定）
 $ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Path
