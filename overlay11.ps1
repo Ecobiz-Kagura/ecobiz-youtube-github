@@ -1,5 +1,6 @@
 # =====================================================================
 # overlay11.ps1（完全版：dark / light を引数化・フォルダ先頭集約）
+# 確認なしで実行する版
 # 実行形式は変更しない：
 #   .\overlay11.ps1 -OverlayTheme dark -OverlayFrom left
 # =====================================================================
@@ -41,7 +42,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # =====================================================
-# ★ オーバーレイ動画フォルダ設定（ここだけ見れば分かる）
+# ★ オーバーレイ動画フォルダ設定（先頭集約）
 # =====================================================
 $OverlayFolderMap = @{
     "dark-left"   = "D:\images_for_slide_show\MP4s-dark\left"
@@ -73,7 +74,7 @@ function Get-LatestVideoInCwd([string[]]$exts){
   $files | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
-# オーバーレイ動画取得（先頭Map優先／完全互換fallbackあり）
+# オーバーレイ動画取得（先頭Map優先／互換fallbackあり）
 function Pick-RandomOverlay([string]$base, [string]$theme, [string]$from){
 
   $key = "$theme-$from"
@@ -82,7 +83,6 @@ function Pick-RandomOverlay([string]$base, [string]$theme, [string]$from){
     $dir = $OverlayFolderMap[$key]
   }
   else {
-    # 旧来方式（互換）
     $root = Join-Path $base ("MP4s-{0}" -f $theme)
     $dir  = Join-Path $root $from
   }
@@ -159,17 +159,12 @@ try {
     $bg
   )
 
-  # 実行前確認（overlay11.ps1 のみ）
-  $cmdPreview = 'ffmpeg ' + ($ffArgs | ForEach-Object {
+  # 実行コマンド表示（確認なし）
+  $parts = $ffArgs | ForEach-Object {
     if ($_ -match '\s') { '"' + ($_ -replace '"','\"') + '"' } else { $_ }
-  } -join ' ')
-  Write-Host ""
-  Write-Host "[CONFIRM] 実行コマンド:"
-  Write-Host $cmdPreview
-  $ans = Read-Host "このまま実行しますか？ (y/N)"
-  if ($ans -notin @("y","Y","yes","YES")) {
-    throw "ユーザーがキャンセルしました"
   }
+  Write-Host ""
+  Write-Host "[CMD] ffmpeg " + ($parts -join ' ')
 
   Stamp "ffmpeg 開始（出力は元と同名）"
   $p = Start-Process -NoNewWindow -PassThru -Wait -FilePath "ffmpeg" -ArgumentList $ffArgs
