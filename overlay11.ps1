@@ -33,6 +33,7 @@ param(
 
   # ÅV”wŒi‚ÌŒŸõ‘ÎÛŠg’£q
   [string[]]$BackgroundExts = @("*.mp4","*.mov","*.mkv","*.webm")
+
 )
 
 Set-StrictMode -Version Latest
