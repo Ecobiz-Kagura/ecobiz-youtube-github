@@ -1,1 +1,6 @@
-.\charamin-overlay3.ps1 .\11-joyuu-takamine-hideko.ps1 "" epilogue -MakeWide
+# 字幕と動画
+.\charamin-overlay3.ps1 .\11-yakuza-1970.ps1 "" epilogue -MakeWide -WideFontSize 20
+# 動画とワイプ
+.\overlay11.ps1 -OverlayTheme dark -OverlayFrom left
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\run10.ps1 -SetupScriptPath .\movies\11-tokyo-23ku.ps1 -Mode epilogue -MakeWide:$true -WideFontSize 20 -OverlayTheme epilogue -OverlayFrom left -SkipOverlay:$false -UploaderMode kankyou
