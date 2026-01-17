@@ -242,6 +242,9 @@ Write-Host ""
 Write-Host "[INFO] 実行開始..."
 Write-Host ""
 
+Write-Host "人出で追加: 2026-01-17"
+rm *mp4
+
 # ===== 全体タイマー開始（確認待ち時間は含めない）=====
 $TotalStart = Get-Date
 
@@ -350,3 +353,7 @@ finally {
   Write-Host ("総処理時間 : {0} 秒 ({1})" -f ([int]$TotalSpan.TotalSeconds), $TotalSpan)
   Write-Host "======================================"
 }
+
+Write-Host "ccsファイルとwavファイルをdoneに移動"
+mv *.ccs ./done/
+mv *.wav ./done/
