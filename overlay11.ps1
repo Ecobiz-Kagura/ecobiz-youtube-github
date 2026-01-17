@@ -13,7 +13,7 @@ param(
   [string]$OverlayVideoPath,
 
   # ★テーマ（dark / light）
-  [ValidateSet("dark","light")]
+  [ValidateSet("dark","light","epilogue")]
   [string]$OverlayTheme = "dark",
 
   # ★位置（left / right / center）
@@ -49,9 +49,13 @@ $OverlayFolderMap = @{
     "dark-right"  = "D:\images_for_slide_show\MP4s-dark\right"
     "dark-center" = "D:\images_for_slide_show\MP4s-dark\center"
 
-    "light-left"   = "D:\images_for_slide_show\MP4s-light\left"
-    "light-right"  = "D:\images_for_slide_show\MP4s-light\right"
-    "light-center" = "D:\images_for_slide_show\MP4s-light\center"
+    "epilogue-left"   = "D:\images_for_slide_show\MP4s-epilogue\left"
+    "epilogue-right"  = "D:\images_for_slide_show\MP4s-epilogue\right"
+    "epilogue-center" = "D:\images_for_slide_show\MP4s-epilogue\center"
+
+    "silent-left"   = "D:\images_for_slide_show\MP4s-light\left"
+    "silent-right"  = "D:\images_for_slide_show\MP4s-light\right"
+    "silent-center" = "D:\images_for_slide_show\MP4s-light\center"
 }
 
 # ========= タイマー =========

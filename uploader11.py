@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-YouTube uploader (single file) - 完全版（最終・途中経過/説明文表示対応 + modeスイッチ + mp4指定）
+YouTube uploader (single file) - 完全版
+（最終・途中経過/説明文表示対応 + modeスイッチ + mp4指定 + today再帰検索(y/N)）
 
 要件反映：
 - mp4 と 90%以上一致する txt を同一ディレクトリから探索してメタデータに使う（正規化あり）
@@ -23,6 +24,10 @@ YouTube uploader (single file) - 完全版（最終・途中経過/説明文表�
 - ★--mode スイッチで joyuu/kankyou/yakuza/kashu/none を切り替え（prefix/tags/category まとめて切替）
 - ★--dry_run でアップロードせず確認のみ
 - ★--loose_txt で類似判定を緩める（例: 0.90 → 0.80）
+- ★today 再帰検索：
+    * 同フォルダ類似検索→fallback の後、today_root を再帰検索して候補提示
+    * --confirm_today で候補を y/N で採用確認
+    * --today_recursive はデフォルトON（無効化は --no_today_recursive）
 """
 
 import os
@@ -62,6 +67,11 @@ DEFAULT_CATEGORY = os.environ.get("YT_CATEGORY_ID", "22")
 DEFAULT_PORT = int(os.environ.get("YT_OAUTH_PORT", "8080"))
 DEFAULT_TXT_SIMILARITY = float(os.environ.get("YT_TXT_SIMILARITY", "0.90"))
 DEFAULT_DONE_DIR = os.environ.get("YT_DONE_DIR", "done")
+
+DEFAULT_TODAY_ROOT = os.environ.get(
+    "YT_TODAY_ROOT",
+    r"C:\Users\user\OneDrive\＊【エコビズ】\today"
+)
 
 # =========================
 # mode プリセット
@@ -327,6 +337,50 @@ def build_fallback_txt_candidates(mp4_path: str) -> List[str]:
 
 
 # =========================
+# today 再帰検索（txt）
+# =========================
+def iter_txt_files_recursive(root_dir: str) -> List[str]:
+    out: List[str] = []
+    if not root_dir or not os.path.isdir(root_dir):
+        return out
+    for cur, _dirs, files in os.walk(root_dir):
+        for fn in files:
+            if fn.lower().endswith(".txt"):
+                out.append(os.path.join(cur, fn))
+    return out
+
+
+def find_similar_txt_in_root_recursive(
+    mp4_path: str,
+    root_dir: str,
+    threshold: float,
+    limit: int = 10,
+) -> List[Tuple[float, str, str]]:
+    mp4_stem_raw = os.path.splitext(os.path.basename(mp4_path))[0]
+    mp4_stem_norm = normalize_stem(mp4_stem_raw)
+
+    cands: List[Tuple[float, str, str]] = []
+    for txt_path in iter_txt_files_recursive(root_dir):
+        stem = os.path.splitext(os.path.basename(txt_path))[0]
+        stem_norm = normalize_stem(stem)
+        r = similarity(mp4_stem_norm, stem_norm)
+        if r >= threshold:
+            cands.append((r, txt_path, stem_norm))
+
+    cands.sort(key=lambda x: x[0], reverse=True)
+    return cands[:limit]
+
+
+def ask_yes_no(prompt: str, default_no: bool = True) -> bool:
+    # default_no=True のとき Enter は N 扱い
+    suffix = " [y/N]: " if default_no else " [Y/n]: "
+    s = input(prompt + suffix).strip().lower()
+    if not s:
+        return (not default_no)
+    return s in ("y", "yes")
+
+
+# =========================
 # Auth
 # =========================
 def authenticate(token_file: str, credentials_file: str, port: int) -> Optional[Credentials]:
@@ -516,28 +570,59 @@ def upload_single_video(
     show_progress: bool,
     txt_similarity: float,
     dry_run: bool,
+    today_root: Optional[str],
+    today_recursive: bool,
+    confirm_today: bool,
 ):
     if not file_path:
         print("エラー: mp4 が指定されていません。かつ、カレントディレクトリに mp4 が見つかりません。")
         return
 
+    file_path = os.path.abspath(file_path)
     if not os.path.isfile(file_path):
         print(f"エラー: 指定された mp4 が無効です: {file_path}")
         return
 
-    file_path = os.path.abspath(file_path)
     fallback_title = os.path.splitext(os.path.basename(file_path))[0]
 
+    # ① 同フォルダ：類似txt検索
     used_txt = find_similar_txt(file_path, txt_similarity, debug=True)
 
+    # ② 同フォルダ：fallback候補を試す
     if not used_txt:
-        # 複数fallbackを試す
         for cand in build_fallback_txt_candidates(file_path):
             if os.path.exists(cand):
                 used_txt = cand
                 print(f"fallback候補でtxt検出: {os.path.basename(used_txt)}")
                 break
 
+    # ③ today 再帰検索（デフォルトON）
+    if (not used_txt) and today_recursive and today_root:
+        print(f"today再帰検索: {today_root}")
+        hits = find_similar_txt_in_root_recursive(
+            mp4_path=file_path,
+            root_dir=today_root,
+            threshold=txt_similarity,
+            limit=10,
+        )
+        if hits:
+            print(f"today候補（上位{len(hits)}件）:")
+            for r, path, norm in hits:
+                print(f"  {r:.3f}  {path}  (norm='{norm}')")
+
+            if confirm_today:
+                for r, path, _norm in hits:
+                    if ask_yes_no(f"このtxtを採用しますか？ {os.path.basename(path)}  一致率={r:.3f}"):
+                        used_txt = path
+                        print(f"採用: {used_txt}")
+                        break
+            else:
+                used_txt = hits[0][1]
+                print(f"today最上位を採用: {used_txt}")
+        else:
+            print("todayでも類似txtは見つかりませんでした。")
+
+    # txt からメタデータ確定
     if used_txt:
         title, desc = get_metadata_from_textfile(used_txt, fallback_title)
     else:
@@ -561,7 +646,7 @@ def upload_single_video(
     else:
         print("  説明文: （空）")
 
-    # ★ dry_run
+    # dry_run
     if dry_run:
         print("dry_run 指定のため、アップロードは行いません。")
         return
@@ -635,7 +720,9 @@ def resolve_effective_settings(args) -> Tuple[str, str, List[str], float]:
 # CLI
 # =========================
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="YouTube uploader（単発：類似txt/空行/【】除去/説明文表示/進捗表示/mode切替/mp4指定）")
+    p = argparse.ArgumentParser(
+        description="YouTube uploader（単発：類似txt/空行/【】除去/説明文表示/進捗表示/mode切替/mp4指定/today再帰(y/N)）"
+    )
 
     # mp4（明示指定）
     p.add_argument("--mp4", default=None, help="アップロードする mp4 のパス（位置引数より優先）")
@@ -669,6 +756,23 @@ if __name__ == "__main__":
     p.add_argument("--loose_txt", action="store_true", help="類似判定を緩める（最小 0.80 まで）")
     p.add_argument("--dry_run", action="store_true", help="アップロードせず、採用txt/タイトル/説明文だけ表示")
 
+    # today 再帰検索（デフォルトON）
+    p.add_argument("--today_root", default=DEFAULT_TODAY_ROOT, help="today ルート（再帰検索用）")
+    p.add_argument(
+        "--today_recursive",
+        dest="today_recursive",
+        action="store_true",
+        default=True,
+        help="today を再帰検索して txt 候補を探す（既定で ON）"
+    )
+    p.add_argument(
+        "--no_today_recursive",
+        dest="today_recursive",
+        action="store_false",
+        help="today 再帰検索を無効化する"
+    )
+    p.add_argument("--confirm_today", action="store_true", help="today 候補の採用を y/N で確認する")
+
     args = p.parse_args()
 
     prefix, category_id, tags, txt_similarity = resolve_effective_settings(args)
@@ -691,4 +795,7 @@ if __name__ == "__main__":
         show_progress=not args.no_progress,
         txt_similarity=txt_similarity,
         dry_run=args.dry_run,
+        today_root=args.today_root,
+        today_recursive=args.today_recursive,
+        confirm_today=args.confirm_today,
     )
