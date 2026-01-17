@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # BGMフォルダ
-$BgmDir = "D:\ecobiz-youtube-uploader\google-trans\MP3s\epilogue"
+$BgmDir = "D:\images_for_slide_show\MP3s\epilogue"
 
 # ffmpeg が見つかるか確認（PATH or フルパス想定）
 $ffmpegCmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
@@ -25,7 +25,7 @@ if (-not $bgmFiles -or $bgmFiles.Count -eq 0) {
     throw "BGMファイルが見つかりません: $BgmDir"
 }
 $BgmPath = ($bgmFiles | Get-Random).FullName
-
+    
 Write-Host "選択されたBGM: $BgmPath"
 
 # 出力ファイル名（元動画名に _bgm を追加）
@@ -46,16 +46,9 @@ $args = @(
     "-c:v", "copy",
     "-c:a", "aac",
     "-shortest",
+    "-y",
     $OutputMp4
 )
 
 # 実行
 & $ffmpegCmd.Source @args
-
-# 成功したら元ファイルに上書き
-if (Test-Path -LiteralPath $OutputMp4) {
-    Copy-Item -Force -LiteralPath $OutputMp4 -Destination $InputMp4
-    Write-Host "BGM入り動画を上書きしました。"
-} else {
-    Write-Error "BGM入りファイルが生成されませんでした。"
-}
