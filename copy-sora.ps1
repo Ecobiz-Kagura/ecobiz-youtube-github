@@ -57,6 +57,7 @@ $CategoryMap = @{
     "yakuza"         = "‚â‚­‚´"
     "yama"           = "‚â‚Ü"
     "yoshiwara"      = "‚æ‚µ‚í‚ç"
+    "yuukaku"      = "‚ä‚¤‚©‚­"
 }
 
 function Resolve-CategoryLabel {
