@@ -339,6 +339,12 @@ try {
     }
   }
 
+
+  Write-Host "ccsファイルとwavファイルをdoneに移動"
+  mv *.ccs ./done/
+  mv *.wav ./done/
+  mv *.mp4 ./done/
+
   Write-Host ""
   Write-Host "=== DONE ==="
 }
@@ -354,6 +360,3 @@ finally {
   Write-Host "======================================"
 }
 
-Write-Host "ccsファイルとwavファイルをdoneに移動"
-mv *.ccs ./done/
-mv *.wav ./done/
