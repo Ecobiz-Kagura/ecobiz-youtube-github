@@ -86,20 +86,32 @@ MODE_PRESETS = {
     "kashu": {
         "prefix": "【歌手】",
         "tags": ["歌手", "音楽", "昭和歌謡"],
-        "category_id": "10",  # Music
+        "category_id": "10",
     },
     "kankyou": {
         "prefix": "【環境】",
         "tags": ["環境問題", "社会", "記録", "日本"],
-        "category_id": "25",  # News & Politics
+        "category_id": "25",
     },
     "yakuza": {
         "prefix": "【任侠】【渡世】",
         "tags": ["裏社会", "昭和史", "ノンフィクション"],
         "category_id": "22",
     },
+    "sakka": {
+        "prefix": "【作家】",
+        "tags": ["作家", "文学", "日本文学", "昭和", "作家解説"],
+        "category_id": "22",
+    },
+
+    # ★追加：歴史・俗
+    "rekisi": {
+        "prefix": "【歴史・俗】",
+        "tags": ["歴史", "昭和史", "風俗", "社会文化", "日本史"],
+        "category_id": "22",
+    },
+
     "none": {
-        # none は DEFAULT_* を使う（ここは参照しない）
         "prefix": "",
         "tags": [],
         "category_id": DEFAULT_CATEGORY,
@@ -735,7 +747,7 @@ if __name__ == "__main__":
         "--mode",
         default="none",
         choices=list(MODE_PRESETS.keys()),
-        help="種別スイッチ（joyuu / kashu / kankyou / yakuza / none）"
+        help="種別スイッチ（joyuu / kashu / kankyou / yakuza / sakka / none）"
     )
 
     # 以降は全部「明示指定があれば上書き」したいので default=None
