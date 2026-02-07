@@ -3,7 +3,7 @@ param(
   [string]$InputPs1,
 
   [Parameter(Position=1, Mandatory=$false)]
-  [ValidateSet("none","epilogue","ghost","silent")]
+  [ValidateSet("none","epilogue","ghost","silent","twilight")]
   [string]$BgmTheme = "none",
 
   # 名前付きで指定（例: -UploadMode kankyou）

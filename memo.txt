@@ -1,1 +1,5 @@
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\run10.ps1 -SetupScriptPath .\movies\11-kasyu-dansei-1960.ps1 -Mode twilight -MakeWide:$true -WideFontSize 20 -OverlayTheme epilogue -OverlayFrom left -SkipOverlay:$false -UploaderMode kasyu
+
+.\cevio-short-5.ps1 .\movies\11-oiran-okami.ps1 epilogue -UploadMode kankyou
+
+.\gt4.ps1 .\20250821-150502-_環境_日本の技術輸出と国際協力_省エネ専門家派遣とESCOの展開_1990年代半ば.txt .\movies\11-yakuza-1970.ps1 -ForceTts -AudioSource overlay -SubFontSize 48 -SubOutline 3 -BgmTheme epilogue
