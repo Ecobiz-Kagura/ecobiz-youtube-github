@@ -32,7 +32,7 @@ Write-Host "選択されたBGM: $BgmPath"
 $OutputMp4 = [System.IO.Path]::ChangeExtension($InputMp4, $null) + "_bgm.mp4"
 
 # filter_complex
-$filter = "[1:a]volume=0.12[bgm];[0:a]volume=1[v0];[v0][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+$filter = "[1:a]volume=0.3[bgm];[0:a]volume=1[v0];[v0][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
 
 # ffmpeg 引数（配列で安全に渡す）
 $args = @(

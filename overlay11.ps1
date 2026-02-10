@@ -1,7 +1,6 @@
 # =====================================================================
-# overlay11.ps1（完全版：dark / light を引数化・フォルダ先頭集約）
-# 確認なしで実行する版
-# 実行形式は変更しない：
+# overlay11.ps1（完全版：dark / light / epilogue を引数化・フォルダ先頭集約）
+# 確認なしで実行する版（実行形式は変更しない）
 #   .\overlay11.ps1 -OverlayTheme dark -OverlayFrom left
 # =====================================================================
 
@@ -12,18 +11,18 @@ param(
   # オーバーレイ動画（省略可：自動選択）
   [string]$OverlayVideoPath,
 
-  # ★テーマ（dark / light）
+  # テーマ
   [ValidateSet("dark","light","epilogue")]
   [string]$OverlayTheme = "dark",
 
-  # ★位置（left / right / center）
+  # 位置
   [ValidateSet("left","right","center")]
   [string]$OverlayFrom = "left",
 
   # 互換用（使わなくてもよい）
   [string]$OverlayRootBase = "D:\images_for_slide_show",
 
-  # 左上マージン(px)
+  # マージン(px)
   [int]$Margin = 10,
 
   # 透過度（1.0=不透明）
@@ -45,17 +44,20 @@ $ErrorActionPreference = "Stop"
 # ★ オーバーレイ動画フォルダ設定（先頭集約）
 # =====================================================
 $OverlayFolderMap = @{
-    "dark-left"   = "D:\images_for_slide_show\MP4s-dark\left"
-    "dark-right"  = "D:\images_for_slide_show\MP4s-dark\right"
-    "dark-center" = "D:\images_for_slide_show\MP4s-dark\center"
+  # dark
+  "dark-left"    = "D:\images_for_slide_show\MP4s-dark\left"
+  "dark-right"   = "D:\images_for_slide_show\MP4s-dark\right"
+  "dark-center"  = "D:\images_for_slide_show\MP4s-dark\center"
 
-    "epilogue-left"   = "D:\images_for_slide_show\MP4s-epilogue\left"
-    "epilogue-right"  = "D:\images_for_slide_show\MP4s-epilogue\right"
-    "epilogue-center" = "D:\images_for_slide_show\MP4s-epilogue\center"
+  # light
+  "light-left"   = "D:\images_for_slide_show\MP4s-light\left"
+  "light-right"  = "D:\images_for_slide_show\MP4s-light\right"
+  "light-center" = "D:\images_for_slide_show\MP4s-light\center"
 
-    "silent-left"   = "D:\images_for_slide_show\MP4s-light\left"
-    "silent-right"  = "D:\images_for_slide_show\MP4s-light\right"
-    "silent-center" = "D:\images_for_slide_show\MP4s-light\center"
+  # epilogue
+  "epilogue-left"   = "D:\images_for_slide_show\MP4s-epilogue\left"
+  "epilogue-right"  = "D:\images_for_slide_show\MP4s-epilogue\right"
+  "epilogue-center" = "D:\images_for_slide_show\MP4s-epilogue\center"
 }
 
 # ========= タイマー =========
@@ -95,7 +97,7 @@ function Pick-RandomOverlay([string]$base, [string]$theme, [string]$from){
     throw "オーバーレイ取得先が見つかりません: $dir"
   }
 
-  $cands = Get-ChildItem -LiteralPath $dir -File -Filter *.mp4
+  $cands = Get-ChildItem -LiteralPath $dir -File -Filter *.mp4 -ErrorAction SilentlyContinue
   if (-not $cands) {
     throw "オーバーレイ動画がありません: $dir"
   }
@@ -103,9 +105,32 @@ function Pick-RandomOverlay([string]$base, [string]$theme, [string]$from){
   return ($cands | Get-Random).FullName
 }
 
+# ffprobe で duration(秒) を取得（安定化用：-shortest を使わない）
+function Get-DurationSec([string]$path){
+  $out = & ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 $path 2>$null
+  if(-not $out){ throw "ffprobe で duration を取得できません: $path" }
+  $d = [double]($out.Trim())
+  if($d -le 0){ throw "duration が不正です: $d ($path)" }
+  return $d
+}
+
+# 位置に応じた overlay x,y を返す（y は margin 固定、x は left/right/center）
+# ※ overlay の幅は scale2ref の main_w*OverlayRatio に一致する前提
+function Get-OverlayXY([string]$from, [int]$margin){
+  switch ($from) {
+    "left"   { return @("$margin", "$margin") }
+    "right"  { return @("main_w-overlay_w-$margin", "$margin") }
+    "center" { return @("(main_w-overlay_w)/2", "$margin") }
+    default  { return @("$margin", "$margin") }
+  }
+}
+
 try {
   if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     throw "ffmpeg が見つかりません（PATH を確認）"
+  }
+  if (-not (Get-Command ffprobe -ErrorAction SilentlyContinue)) {
+    throw "ffprobe が見つかりません（PATH を確認）"
   }
 
   # ===== 背景動画 =====
@@ -142,20 +167,34 @@ try {
   Copy-Item -LiteralPath $bg -Destination $backup -Force
   Stamp "バックアップ作成: $backup"
 
+  # ===== 背景の尺（-t に使う：無限ループ + -shortest のクラッシュ回避） =====
+  $dur = Get-DurationSec $backup
+  Stamp ("背景の長さ: {0:F3} 秒" -f $dur)
+
+  # ===== overlay 座標 =====
+  $xy = Get-OverlayXY -from $OverlayFrom -margin $Margin
+  $x = $xy[0]
+  $y = $xy[1]
+
   # ===== filter_complex =====
+  # 1) overlay を base 幅比で scale（scale2ref）
+  # 2) overlay を yuva + alpha
+  # 3) base に overlay（位置は left/right/center）
   $filter =
     ("[1:v][0:v]scale2ref=w=main_w*{0}:h=main_w*{0}[ovl][base];" -f $OverlayRatio) +
     ("[ovl]format=yuva420p,colorchannelmixer=aa={0}[ovla];" -f $OverlayAlpha) +
-    ("[base][ovla]overlay={0}:{0}:format=auto[vout]" -f $Margin)
+    ("[base][ovla]overlay=x={0}:y={1}:format=auto[vout]" -f $x, $y)
 
   # ===== ffmpeg =====
+  # -stream_loop -1 は維持（素材を途切れさせない）
+  # ただし終了条件は -shortest ではなく -t (背景尺) で明確化（安定化）
   $ffArgs = @(
     "-y",
     "-i", $backup,
     "-stream_loop","-1","-i", $ov,
     "-filter_complex", $filter,
     "-map","[vout]","-map","0:a?",
-    "-shortest",
+    "-t", ("{0:F3}" -f $dur),
     "-c:v","libx264","-preset","ultrafast","-crf","28",
     "-pix_fmt","yuv420p",
     "-c:a","copy",
@@ -175,11 +214,12 @@ try {
   if ($p.ExitCode -ne 0) { throw "ffmpeg 失敗 (ExitCode=$($p.ExitCode))" }
 
   Write-Host ""
-  Write-Host "? 完了"
-  Write-Host "   - 出力: $bg（元と同名）"
-  Write-Host "   - バックアップ: $backup"
-  Write-Host ("   - サイズ: 背景横幅の{0:P0}×{0:P0}" -f $OverlayRatio)
-  Write-Host "   - Theme/From: $OverlayTheme / $OverlayFrom"
+  Write-Host "完了"
+  Write-Host "  - 出力: $bg（元と同名）"
+  Write-Host "  - バックアップ: $backup"
+  Write-Host ("  - サイズ: 背景横幅の{0:P0}×{0:P0}" -f $OverlayRatio)
+  Write-Host "  - Theme/From: $OverlayTheme / $OverlayFrom"
+  Write-Host ("  - 位置: x={0}, y={1}, margin={2}" -f $x, $y, $Margin)
 }
 catch {
   Write-Error $_
