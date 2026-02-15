@@ -88,6 +88,11 @@ MODE_PRESETS = {
         "tags": ["歌手", "音楽", "昭和歌謡"],
         "category_id": "10",
     },
+    "kasyu": {
+        "prefix": "【歌手】",
+        "tags": ["歌手", "音楽", "昭和歌謡"],
+        "category_id": "10",
+    },
     "kankyou": {
         "prefix": "【環境】",
         "tags": ["環境問題", "社会", "記録", "日本"],
