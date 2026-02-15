@@ -75,7 +75,6 @@ DEFAULT_TODAY_ROOT = os.environ.get(
 
 # =========================
 # mode プリセット
-#  - ここを増やすだけでスイッチ追加できる
 # =========================
 MODE_PRESETS = {
     "joyuu": {
@@ -88,7 +87,7 @@ MODE_PRESETS = {
         "tags": ["歌手", "音楽", "昭和歌謡"],
         "category_id": "10",
     },
-    "kasyu": {
+    "kasyu": {  # typo互換
         "prefix": "【歌手】",
         "tags": ["歌手", "音楽", "昭和歌謡"],
         "category_id": "10",
@@ -108,14 +107,11 @@ MODE_PRESETS = {
         "tags": ["作家", "文学", "日本文学", "昭和", "作家解説"],
         "category_id": "22",
     },
-
-    # ★追加：歴史・俗
     "rekisi": {
         "prefix": "【歴史・俗】",
         "tags": ["歴史", "昭和史", "風俗", "社会文化", "日本史"],
         "category_id": "22",
     },
-
     "none": {
         "prefix": "",
         "tags": [],
@@ -230,11 +226,29 @@ def read_text_lines_best_effort(txt_file: str) -> Optional[List[str]]:
     return None
 
 
+def _looks_like_filename_title(title: str) -> bool:
+    t = title.strip()
+    if not t:
+        return False
+    # 末尾が .txt 等
+    if re.search(r"\.(txt|srt|mp4|mp3)$", t, flags=re.IGNORECASE):
+        return True
+    # パスっぽい
+    if "\\" in t or "/" in t:
+        return True
+    return False
+
+
 def get_metadata_from_textfile(txt_file: str, fallback_title: str) -> Tuple[str, str]:
     """
     - 1行目が空行なら 2行目をタイトル
     - タイトルから全角【】を除去
     - タイトル行以外を description にする
+
+    ★改善:
+    - description は「空白だけの行」を除去して結合
+    - タイトルがファイル名っぽい場合は .txt を落とす（事故防止）
+    - タイトル行以外が全部空に見えるときでも、本文があるなら拾えるようにする
     """
     lines = read_text_lines_best_effort(txt_file)
     if lines is None:
@@ -256,8 +270,26 @@ def get_metadata_from_textfile(txt_file: str, fallback_title: str) -> Tuple[str,
 
     title = title.replace("【", "").replace("】", "").strip()
 
+    # ★タイトルがファイル名っぽいなら拡張子を落とす（.txt が混ざる事故対策）
+    if _looks_like_filename_title(title):
+        title = re.sub(r"\.txt$", "", title, flags=re.IGNORECASE).strip()
+
+    # タイトル行以外
     desc_lines = [line for i, line in enumerate(stripped) if i != title_index]
-    description = "\n".join(desc_lines).strip()
+
+    # ★空白だけの行を落として結合（「空行しか無い」→空）
+    meaningful = [l for l in desc_lines if l.strip()]
+    description = "\n".join(meaningful).strip()
+
+    # ★救済：もし description が空だが、実は本文がタイトル行“以外”にあるようなら拾う
+    # 例: タイトル行の直後に不可視文字/全角スペース混じり → strip判定で落ちる等のケース
+    if not description:
+        # 元のdesc_linesを、軽く正規化して再評価（全角スペース→半角スペース扱い）
+        def norm_ws(x: str) -> str:
+            return x.replace("\u3000", " ").strip()
+
+        meaningful2 = [norm_ws(l) for l in desc_lines if norm_ws(l)]
+        description = "\n".join(meaningful2).strip()
 
     return title, description
 
@@ -320,29 +352,17 @@ def build_fallback_txt_candidates(mp4_path: str) -> List[str]:
     stem_raw = os.path.splitext(os.path.basename(mp4_path))[0]
     stem_norm = normalize_stem(stem_raw)
 
-    # ありがちな派生（"" は重複を増やすので入れない）
     suffixes = ["_bgm", "._bgm", ".bgm", "_wide", "._wide", "_short", "._short", "_tts", "._tts"]
 
     cands = []
-
-    # 1) 完全同名（フルパス）
     cands.append(base_noext + ".txt")
-
-    # 2) 正規化名（素）
     cands.append(os.path.join(dir_path, stem_norm + ".txt"))
-
-    # 3) 正規化名 + サフィックス違い（bgm 等）
     for s in suffixes:
         cands.append(os.path.join(dir_path, stem_norm + s + ".txt"))
-
-    # 4) 元のstem_rawから末尾ドットだけ落としたもの
     stem_trimdot = re.sub(r"\.+$", "", stem_raw)
     cands.append(os.path.join(dir_path, stem_trimdot + ".txt"))
-
-    # 5) 元のstem_rawそのまま
     cands.append(os.path.join(dir_path, stem_raw + ".txt"))
 
-    # 重複排除（順序維持）
     seen = set()
     out = []
     for p in cands:
@@ -389,7 +409,6 @@ def find_similar_txt_in_root_recursive(
 
 
 def ask_yes_no(prompt: str, default_no: bool = True) -> bool:
-    # default_no=True のとき Enter は N 扱い
     suffix = " [y/N]: " if default_no else " [Y/n]: "
     s = input(prompt + suffix).strip().lower()
     if not s:
@@ -540,7 +559,6 @@ def move_related_to_done(mp4_path: str, used_txt: Optional[str], done_dir: str):
 
     mp4_dir = os.path.dirname(os.path.abspath(mp4_path))
 
-    # 類似で使った txt が同名でない場合も移動（ただし mp4 と同じフォルダ内のみ）
     if used_txt:
         used_txt_abs = os.path.abspath(used_txt)
         base_txt_abs = os.path.abspath(base + ".txt")
@@ -663,7 +681,6 @@ def upload_single_video(
     else:
         print("  説明文: （空）")
 
-    # dry_run
     if dry_run:
         print("dry_run 指定のため、アップロードは行いません。")
         return
@@ -704,7 +721,6 @@ def resolve_effective_settings(args) -> Tuple[str, str, List[str], float]:
     """
     mode = args.mode or "none"
 
-    # ベース（mode）
     if mode != "none":
         conf = MODE_PRESETS.get(mode, MODE_PRESETS["kashu"])
         base_prefix = conf["prefix"]
@@ -715,17 +731,14 @@ def resolve_effective_settings(args) -> Tuple[str, str, List[str], float]:
         base_category = DEFAULT_CATEGORY
         base_tags = parse_tags_csv(DEFAULT_TAGS)
 
-    # CLI があれば上書き（明示指定のみ）
     prefix = base_prefix if args.prefix is None else args.prefix
     category_id = base_category if args.category_id is None else args.category_id
 
-    # tags は --tags 指定があれば完全上書き、なければ mode/default を使用
     if args.tags is None:
         tags = base_tags
     else:
         tags = parse_tags_csv(args.tags)
 
-    # txt similarity（--loose_txt があれば下げる）
     txt_similarity = DEFAULT_TXT_SIMILARITY if args.txt_similarity is None else float(args.txt_similarity)
     if args.loose_txt:
         txt_similarity = min(txt_similarity, 0.80)
@@ -741,21 +754,16 @@ if __name__ == "__main__":
         description="YouTube uploader（単発：類似txt/空行/【】除去/説明文表示/進捗表示/mode切替/mp4指定/today再帰(y/N)）"
     )
 
-    # mp4（明示指定）
     p.add_argument("--mp4", default=None, help="アップロードする mp4 のパス（位置引数より優先）")
-
-    # mp4（位置引数：残して互換維持）
     p.add_argument("path", nargs="?", default=None, help="mp4 のパス（省略可。未指定なら最新mp4）")
 
-    # mode
     p.add_argument(
         "--mode",
         default="none",
         choices=list(MODE_PRESETS.keys()),
-        help="種別スイッチ（joyuu / kashu / kankyou / yakuza / sakka / none）"
+        help="種別スイッチ（joyuu / kashu / kankyou / yakuza / sakka / rekisi / none）"
     )
 
-    # 以降は全部「明示指定があれば上書き」したいので default=None
     p.add_argument("--category_id", default=None, help="YouTube categoryId（未指定なら mode/DEFAULT から決定）")
     p.add_argument("--privacy_status", default=DEFAULT_PRIVACY, choices=["public", "unlisted", "private"])
     p.add_argument("--prefix", default=None, help="タイトル接頭辞（未指定なら mode/DEFAULT から決定）")
@@ -773,7 +781,6 @@ if __name__ == "__main__":
     p.add_argument("--loose_txt", action="store_true", help="類似判定を緩める（最小 0.80 まで）")
     p.add_argument("--dry_run", action="store_true", help="アップロードせず、採用txt/タイトル/説明文だけ表示")
 
-    # today 再帰検索（デフォルトON）
     p.add_argument("--today_root", default=DEFAULT_TODAY_ROOT, help="today ルート（再帰検索用）")
     p.add_argument(
         "--today_recursive",
