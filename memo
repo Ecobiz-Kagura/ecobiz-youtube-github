@@ -1,0 +1,21 @@
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\run10.ps1 -SetupScriptPath .\movies\11-kasyu-dansei-1960.ps1 -Mode twilight -MakeWide:$true -WideFontSize 20 -OverlayTheme epilogue -OverlayFrom left -SkipOverlay:$false -UploaderMode kasyu
+
+.\cevio-short-7.ps1 .\movies\11-oiran-okami.ps1 epilogue -UploadMode kankyou
+
+.\gt4.ps1 .\20250821-150502-_環境_日本の技術輸出と国際協力_省エネ専門家派遣とESCOの展開_1990年代半ば.txt .\movies\11-yakuza-1970.ps1 -ForceTts -AudioSource overlay -SubFontSize 48 -SubOutline 3 -BgmTheme epilogue
+
+.\gt4s.ps1 .\20250821-150502-_環境_日本の技術輸出と国際協力_省エネ専門家派遣とESCOの展開_1990年代半ば.txt .\movies\11-yakuza-1970.ps1 -ForceTts -AudioSource overlay -SubFontSize 48 -SubOutline 3 -BgmTheme epilogue -AspectPreset short
+
+
+.\cevio-short-9.ps1 .\movies\14-joyuu-okada-mariko.ps1 twilight -BgmVolume 0.7 -MainVolume 1.30 -VoiceGain 1.40 -SkipUpload
+
+2026-02-13
+
+.\cevio-long-10.ps1 .\movies\14-joyuu-okada-mariko.ps1 twilight -BgmVolume 0.4 -MainVolume 2.0 -VoiceGain 4.2 -UploadMode joyuu
+.\cevio-short-11.ps1 .\movies\14-joyuu-okada-mariko.ps1 twilight -BgmVolume 0.4 -MainVolume 1.30 -VoiceGain 1.40 -UploadMode joyuu
+
+.\gt8.ps1 '.\20251219-025959-吉原花魁-風に誘われる夕幻_引手茶屋と吉原の遊興変遷(江戸時代).txt' .\movies\11-oiran.ps1 -SubFontSize 64 -SubOutline 3 -BgmTheme epilogue -UploadMode rekisi
+
+.\gt8s.ps1 '.\20251216-024327-short-吉原花魁-言葉で金を引き出す夜_宝暦以降_新吉原における遊女と客の駆け引き_(1).txt' .\movies\11-oiran.ps1 -SubFontSize 48 -SubOutline 3 -BgmTheme epilogue -UploadMode rekisi -Shorts -SubMarginLR 240 -SubMarginV 120
+
+ .\count.ps1 -CopyCount 10 -PromptWord
