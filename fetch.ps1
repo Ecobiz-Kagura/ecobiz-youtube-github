@@ -2,7 +2,8 @@
 # PowerShell：today から指定件数ランダム取得（既定：非再帰）
 # Mode でカテゴリ切替（Map + token）
 # 類似ファイル確認 + スキップ時は done に安全移動（衝突対応）
-# 先頭で対象フォルダ内の総ファイル数を表示
+# 先頭で対象フォルダ・done・google-trans・カレントdoneを表示
+# y/N 確認後に処理を実行
 # 各処理対象ファイルをフルパスで表示
 # 各ファイルごとに経過時間（秒 + mm:ss）＋累計（秒 + mm:ss）を表示
 # 最後に *.txt のファイル名リネーム（既存仕様）
@@ -11,11 +12,11 @@
 param(
     [ValidateSet(
         'genpatsu','huudo','joyuu','kasyu','marx','sakka','rakugo','shinjuku',
-        'tekiya','yakuza','yoshiwara','cyber','kankyou','gijutsu'
+        'tekiya','yakuza','yoshiwara','cyber','kankyou','gijutsu','short'
     )]
     [string]$Mode = '',
 
-    [int]$CopyCount = 5,
+    [int]$CopyCount = 20,
 
     [double]$Threshold = 0.80,
 
@@ -40,7 +41,7 @@ $ErrorActionPreference = "Stop"
 # ======== パス設定 ========
 $BaseToday = "C:\Users\user\OneDrive\＊【エコビズ】\today"
 $trans     = "D:\ecobiz-youtube-uploader\google-trans"
-$dest      = (Get-Location).Path
+$dest      = (Get-Location).Path  # カレント（コピー先）
 
 # ======== Map（カテゴリフォルダ） ========
 $Map = @{
@@ -58,6 +59,7 @@ $Map = @{
     cyber     = Join-Path $BaseToday 'サイバー'
     kankyou   = Join-Path $BaseToday '環境'
     gijutsu   = Join-Path $BaseToday '技術'
+    short     = Join-Path $BaseToday 'short'
 }
 
 # ======== Mode -> 既定 token（MustContain 未指定のときだけ使う） ========
@@ -83,8 +85,34 @@ if (-not $PSBoundParameters.ContainsKey('MustContain')) {
 }
 
 # ======== 探索対象フォルダ決定 ========
-$src = if ($UseModeFolder) { $Map[$Mode] } else { $BaseToday }
-$done = Join-Path $src 'done'  # done は探索対象フォルダ配下
+$src  = if ($UseModeFolder) { $Map[$Mode] } else { $BaseToday }
+$done = Join-Path $src 'done'              # 抽選元側 done
+$doneCurrentDir = Join-Path $dest 'done'   # カレント側 done
+
+# ======== 事前ログ＋確認 ========
+Write-Host "=== 実行設定 ===" -ForegroundColor Cyan
+Write-Host ("  Mode          : {0}" -f $Mode)
+Write-Host ("  UseModeFolder : {0}" -f $UseModeFolder.IsPresent)
+Write-Host ("  Recurse       : {0}" -f $Recurse.IsPresent)
+Write-Host ("  CopyCount     : {0}" -f $CopyCount)
+Write-Host ("  Threshold     : {0:P0}" -f $Threshold)
+Write-Host ("  MustContain   : {0}" -f ($MustContain -join ",")) -ForegroundColor DarkGray
+Write-Host ("  MustNotContain: {0}" -f ($MustNotContain -join ",")) -ForegroundColor DarkGray
+Write-Host ""
+
+Write-Host "=== チェック対象ディレクトリ ===" -ForegroundColor Cyan
+Write-Host ("  [抽選元]            : {0}" -f $src)
+Write-Host ("  [抽選元 done]       : {0}" -f $done)
+Write-Host ("  [カレント done]     : {0}" -f $doneCurrentDir)
+Write-Host ("  [google-trans 全体] : {0}" -f $trans)
+Write-Host ("  [コピー先(カレント)]: {0}" -f $dest)
+Write-Host ""
+
+$answer = Read-Host "これらのディレクトリで処理を行います。実行してよろしいですか？ (y/N)"
+if ($answer -notin @('y','Y','yes','YES')) {
+    Write-Host "キャンセルしました。" -ForegroundColor Yellow
+    return
+}
 
 # ======== 関数 ========
 function Normalize-Name([string]$s) {
@@ -136,7 +164,7 @@ function Get-NormalizedSimilarity([string]$a, [string]$b) {
         $tmp = $prev; $prev = $curr; $curr = $tmp
     }
 
-    $dist = $prev[$lb]
+    $dist   = $prev[$lb]
     $maxLen = [Math]::Max($la, $lb)
     return 1.0 - ($dist / [double]$maxLen)
 }
@@ -145,10 +173,10 @@ function Safe-MoveToDone([IO.FileInfo]$srcFile, [string]$doneDir, [switch]$WhatI
     if (-not (Test-Path -LiteralPath $doneDir)) {
         New-Item -ItemType Directory -Path $doneDir | Out-Null
     }
-    $base = [IO.Path]::GetFileNameWithoutExtension($srcFile.Name)
-    $ext  = [IO.Path]::GetExtension($srcFile.Name)
+    $base   = [IO.Path]::GetFileNameWithoutExtension($srcFile.Name)
+    $ext    = [IO.Path]::GetExtension($srcFile.Name)
     $target = Join-Path $doneDir $srcFile.Name
-    $n = 1
+    $n      = 1
     while (Test-Path -LiteralPath $target) {
         $target = Join-Path $doneDir ("{0}({1}){2}" -f $base, $n, $ext)
         $n++
@@ -177,13 +205,6 @@ function Show-StepTime(
 
 # ===== 全体タイマー開始 =====
 $swAll = [System.Diagnostics.Stopwatch]::StartNew()
-
-# ===== ログ（モード・パス） =====
-Write-Host ("=== Mode: {0} / UseModeFolder: {1} / Recurse: {2} ===" -f $Mode, $UseModeFolder.IsPresent, $Recurse.IsPresent) -ForegroundColor Cyan
-Write-Host ("=== src: {0}" -f $src) -ForegroundColor DarkCyan
-Write-Host ("=== Map[{0}]: {1}" -f $Mode, $Map[$Mode]) -ForegroundColor DarkGray
-Write-Host ("=== MustContain: {0}" -f ($MustContain -join ",")) -ForegroundColor DarkGray
-Write-Host ("=== MustNotContain: {0}" -f ($MustNotContain -join ",")) -ForegroundColor DarkGray
 
 # ===== 対象フォルダのファイル数を表示 =====
 if (-not (Test-Path -LiteralPath $src)) { throw "元ディレクトリが見つかりません: $src" }
@@ -215,15 +236,18 @@ Write-Host ("=== 抽出対象 {0} 件 ===" -f $pickCount) -ForegroundColor Cyan
 $randomFiles | ForEach-Object { Write-Host ("  - " + $_.FullName) -ForegroundColor Gray }
 
 # ===== 類似チェック準備 =====
-$doneFiles  = if (Test-Path -LiteralPath $done)  { Get-ChildItem -LiteralPath $done  -File -Recurse }  else { @() }
-$transFiles = if (Test-Path -LiteralPath $trans) { Get-ChildItem -LiteralPath $trans -File -Recurse } else { @() }
+$doneFiles_src  = if (Test-Path -LiteralPath $done)          { Get-ChildItem -LiteralPath $done          -File -Recurse } else { @() }
+$transFiles     = if (Test-Path -LiteralPath $trans)         { Get-ChildItem -LiteralPath $trans         -File -Recurse } else { @() }
+$doneFiles_dest = if (Test-Path -LiteralPath $doneCurrentDir){ Get-ChildItem -LiteralPath $doneCurrentDir -File -Recurse } else { @() }
 
-$allIndex = foreach ($f in ($doneFiles + $transFiles)) {
+$allIndex = foreach ($f in ($doneFiles_src + $doneFiles_dest + $transFiles)) {
     [PSCustomObject]@{
         Path     = $f.FullName
         Name     = $f.Name
         NormName = (Normalize-Name $f.Name)
-        Source   = if ($f.FullName -like "$trans*") { "google-trans" } else { "done" }
+        Source   = if ($f.FullName -like "$trans*")             { "google-trans" }
+                   elseif ($f.FullName -like "$doneCurrentDir*"){ "done-current" }
+                   else                                         { "done-src" }
     }
 }
 
@@ -295,7 +319,10 @@ foreach ($srcFile in $randomFiles) {
     try {
         # 片側のみ short かつ 類似度高い → コピー
         if ($best -and $xorShort -and (($bestSim -ge $Threshold) -or ($simNoShort -ge $Threshold))) {
-            Write-Host ("  → 'short' 片側一致：コピー（類似:{0:F1}% / 相手:{1} [{2}]）" -f ($bestSim*100), $best.Name, $best.Source) -ForegroundColor Green
+            Write-Host (
+                "  → 'short' 片側一致：コピー（類似:{0:F1}% / 相手:{1} [{2}]）" -f `
+                ($bestSim*100), $best.Name, $best.Source
+            ) -ForegroundColor Green
             Copy-Item -LiteralPath $srcFile.FullName -Destination $dest -Force -WhatIf:$WhatIf
             $copied++
             Show-StepTime $swOne $swAll
@@ -305,7 +332,10 @@ foreach ($srcFile in $randomFiles) {
         # 類似しきい値以上 → done に移動
         if ($best -and $bestSim -ge $Threshold) {
             $moved = Safe-MoveToDone -srcFile $srcFile -doneDir $done -WhatIf:$WhatIf
-            Write-Host ("  → SKIP: 類似 {0:F1}% / 相手:{1} [{2}] → done: {3}" -f ($bestSim*100), $best.Name, $best.Source, $moved) -ForegroundColor Yellow
+            Write-Host (
+                "  → SKIP: 類似 {0:F1}% / 相手:{1} [{2}] → done: {3}" -f `
+                ($bestSim*100), $best.Name, $best.Source, $moved
+            ) -ForegroundColor Yellow
             $skipped++; $movedToDone++
             Show-StepTime $swOne $swAll
             continue
@@ -314,7 +344,10 @@ foreach ($srcFile in $randomFiles) {
         # short 除去後の類似が高い → done に移動
         if ($best -and $simNoShort -ge $Threshold) {
             $moved = Safe-MoveToDone -srcFile $srcFile -doneDir $done -WhatIf:$WhatIf
-            Write-Host ("  → SKIP: short除去類似 {0:F1}% / 相手:{1} [{2}] → done: {3}" -f ($simNoShort*100), $best.Name, $best.Source, $moved) -ForegroundColor Yellow
+            Write-Host (
+                "  → SKIP: short除去類似 {0:F1}% / 相手:{1} [{2}] → done: {3}" -f `
+                ($simNoShort*100), $best.Name, $best.Source, $moved
+            ) -ForegroundColor Yellow
             $skipped++; $movedToDone++
             Show-StepTime $swOne $swAll
             continue
@@ -354,13 +387,15 @@ if (-not $files) {
     return
 }
 
-$total = $files.Count
-$renamed = 0; $skipRename = 0; $conflicted = 0
+$total      = $files.Count
+$renamed    = 0
+$skipRename = 0
+$conflicted = 0
 
 for ($i = 0; $i -lt $total; $i++) {
     $swOne = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $f = $files[$i]
+    $f        = $files[$i]
     $nameOrig = $f.Name
 
     # 正規化 + 置換チェーン（1行）
@@ -395,7 +430,7 @@ for ($i = 0; $i -lt $total; $i++) {
         if (Test-Path -LiteralPath $targetPath) {
             $base = [IO.Path]::GetFileNameWithoutExtension($nameNew)
             $ext  = [IO.Path]::GetExtension($nameNew)
-            $n = 1
+            $n    = 1
             do {
                 $candName = '{0}({1}){2}' -f $base, $n, $ext
                 $candPath = Join-Path -Path $f.DirectoryName -ChildPath $candName
@@ -407,7 +442,8 @@ for ($i = 0; $i -lt $total; $i++) {
             $conflicted++; $renamed++
             Show-StepTime $swOne $swAll
             continue
-        } else {
+        }
+        else {
             Rename-Item -LiteralPath $f.FullName -NewName $nameNew -WhatIf:$WhatIf
             Write-Host ("[renamed ] {0} -> {1}" -f $nameOrig, $nameNew)
             $renamed++
