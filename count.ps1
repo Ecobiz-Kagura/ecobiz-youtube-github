@@ -3,6 +3,9 @@
 # Mode でカテゴリ切替（Map + token）
 # 類似ファイル確認 + スキップ時は done に安全移動（衝突対応）
 # 先頭で対象フォルダ内の総ファイル数を表示
+# ★ カテゴリ別（ModeTokenキー別）ファイル件数を「件数順にソートして」表示
+# ★ 表示番号と選択番号がズレない
+# ★ 複数カテゴリ選択は「カテゴリ単位OR」（各カテゴリ内はtoken AND）
 # 各処理対象ファイルをフルパスで表示
 # 各ファイルごとに経過時間（秒 + mm:ss）＋累計（秒 + mm:ss）を表示
 # 最後に *.txt のファイル名リネーム（既存仕様）
@@ -28,8 +31,8 @@ param(
     # 単一ワード指定（例: -Word 環境）
     [string]$Word,
 
-    # Word を番号で選ぶ対話モード（複数番号 OK: 1,3,5）
-    [switch]$PromptWord,
+    # ★ カテゴリ選択プロンプト（既定 true = ハードコーディングで常時ON）
+    [bool]$PromptWord = $true,
 
     # Modeフォルダ（Map[Mode]）を「探索対象」にする（既定：today直下）
     [switch]$UseModeFolder,
@@ -79,110 +82,19 @@ $ModeToken = @{
     shinjuku  = @('新宿')
     tekiya    = @('テキヤ')
     yakuza    = @('やくざ')
-    yoshiwara = @('吉原','花魁')
+    yoshiwara = @('吉原','花魁')    # ←このカテゴリは AND で数える（重複カウントしない）
     cyber     = @('サイバー')
     kankyou   = @('環境')
     gijutsu   = @('技術')
 }
 
-# PromptWord で複数選択したときに OR 条件にするかどうか
-$UseOrMustContain = $false
-
-# ======== Word 選択プロンプト（-PromptWord 指定時のみ） ========
-if ($PromptWord) {
-    # ModeToken の全トークンを一覧化（重複削除）
-    $menuWords = @()
-    foreach ($vals in $ModeToken.Values) {
-        $menuWords += $vals
+# ======== 入力の安全化 ========
+if ($UseModeFolder) {
+    if ([string]::IsNullOrWhiteSpace($Mode)) {
+        throw "-UseModeFolder を指定する場合は -Mode を必ず指定してください。"
     }
-    $menuWords = $menuWords | Sort-Object -Unique
-
-    # === Word 別 ファイル件数 ===
-    $searchRoot = if ($UseModeFolder) { $Map[$Mode] } else { $BaseToday }
-
-    if (Test-Path -LiteralPath $searchRoot) {
-        $allTodayForCount = if ($Recurse) {
-            Get-ChildItem -LiteralPath $searchRoot -File -Recurse
-        } else {
-            Get-ChildItem -LiteralPath $searchRoot -File
-        }
-
-        Write-Host ""
-        Write-Host "=== Word 別 ファイル件数 ===" -ForegroundColor Cyan
-        foreach ($w in $menuWords) {
-            $escaped = [regex]::Escape($w)
-            $cnt = ($allTodayForCount | Where-Object { $_.Name -match $escaped }).Count
-            Write-Host ("  {0,-6} : {1,3} 件" -f $w, $cnt) -ForegroundColor Gray
-        }
-        Write-Host ""
-    }
-    else {
-        Write-Host ("=== Word 別ファイル件数: ルートが見つかりません: {0}" -f $searchRoot) -ForegroundColor Yellow
-        Write-Host ""
-    }
-
-    Write-Host "=== Word 選択（複数可: 例 1,3）===" -ForegroundColor Cyan
-    for ($i = 0; $i -lt $menuWords.Count; $i++) {
-        Write-Host ("[{0}] {1}" -f ($i + 1), $menuWords[$i])
-    }
-    Write-Host "[0] 手入力" -ForegroundColor Yellow
-
-    $sel = Read-Host ("番号を入力してください (0?{0} / カンマ区切り可 / Enterでスキップ)" -f $menuWords.Count)
-
-    if (-not [string]::IsNullOrWhiteSpace($sel)) {
-
-        # カンマ区切りを処理
-        $parts = $sel.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' }
-
-        if ($parts.Count -gt 0) {
-            $selectedWords = @()
-
-            foreach ($p in $parts) {
-                $num = [int]$p
-
-                if ($num -eq 0) {
-                    # 手入力（複数可: 空白区切り）
-                    $manual = Read-Host "Word を入力してください（複数可: 空白区切り）"
-                    if (-not [string]::IsNullOrWhiteSpace($manual)) {
-                        $selectedWords += ($manual.Split() | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
-                    }
-                }
-                elseif ($num -ge 1 -and $num -le $menuWords.Count) {
-                    $selectedWords += $menuWords[$num - 1]
-                }
-            }
-
-            # 重複削除
-            $selectedWords = $selectedWords | Sort-Object -Unique
-
-            if ($selectedWords.Count -gt 0) {
-                # PromptWord で選んだときは MustContain に直接入れる
-                $Word = $null
-                $MustContain = $selectedWords
-
-                # 2つ以上選ばれたときは OR 条件とみなす
-                if ($selectedWords.Count -gt 1) {
-                    $UseOrMustContain = $true
-                }
-                else {
-                    $UseOrMustContain = $false
-                }
-
-                Write-Host ("選択された Word: {0}" -f ($selectedWords -join ", ")) -ForegroundColor Green
-            }
-        }
-    }
-}
-
-# ======== MustContain の最終決定 ========
-if (-not $PSBoundParameters.ContainsKey('MustContain') -and (-not $MustContain -or $MustContain.Count -eq 0)) {
-    if (-not [string]::IsNullOrWhiteSpace($Word)) {
-        # Word があれば、その単一ワードを MustContain に
-        $MustContain = @($Word)
-    }
-    else {
-        # 従来通り ModeToken を使う
-        $MustContain = $ModeToken[$Mode]
+    if (-not $Map.ContainsKey($Mode)) {
+        throw "未知の Mode です: $Mode"
     }
 }
 
@@ -225,6 +137,16 @@ function Matches-NoneTokens([string]$name, [string[]]$tokens) {
         if ($name -match $pat) { return $false }
     }
     return $true
+}
+
+# ★ 複数カテゴリ選択用：各カテゴリ内は AND、カテゴリ同士は OR
+function Matches-AnyTokenGroup([string]$name, [object[]]$groups) {
+    if (-not $groups -or $groups.Count -eq 0) { return $true }
+    foreach ($g in $groups) {
+        # $g は string[] 想定
+        if (Matches-AllTokens -name $name -tokens ([string[]]$g)) { return $true }
+    }
+    return $false
 }
 
 function Get-NormalizedSimilarity([string]$a, [string]$b) {
@@ -292,33 +214,153 @@ function Show-StepTime(
 # ===== 全体タイマー開始 =====
 $swAll = [System.Diagnostics.Stopwatch]::StartNew()
 
+# ===== 対象フォルダの存在確認 =====
+if (-not (Test-Path -LiteralPath $src)) { throw "元ディレクトリが見つかりません: $src" }
+
+# ===== カテゴリ選択（PromptWord=true のとき） =====
+$MustContainGroups = @()   # ★ 複数カテゴリの OR 条件用（各要素は string[]）
+
+if ($PromptWord) {
+
+    $allForCount = if ($Recurse) {
+        Get-ChildItem -LiteralPath $src -File -Recurse
+    } else {
+        Get-ChildItem -LiteralPath $src -File
+    }
+
+    # カテゴリメニューを作る（表示名は Map のフォルダ名を優先）
+    $catMenu = foreach ($k in ($ModeToken.Keys | Sort-Object)) {
+        $label = $k
+        if ($Map.ContainsKey($k)) {
+            # 例：C:\...\today\環境 → 環境
+            $leaf = Split-Path -Path $Map[$k] -Leaf
+            if (-not [string]::IsNullOrWhiteSpace($leaf)) { $label = $leaf }
+        }
+        $tokens = [string[]]$ModeToken[$k]
+
+        # ★ カテゴリ内は AND で件数を数える
+        $cnt = ($allForCount | Where-Object { Matches-AllTokens -name $_.Name -tokens $tokens }).Count
+
+        [PSCustomObject]@{
+            Key    = $k
+            Label  = $label
+            Tokens = $tokens
+            Count  = [int]$cnt
+        }
+    }
+
+    # 件数順（同点は Label 昇順）
+    $catMenuSorted = $catMenu | Sort-Object @{Expression='Count';Descending=$true}, @{Expression='Label';Descending=$false}
+
+    Write-Host ""
+    Write-Host "=== カテゴリ別 ファイル件数（件数順） ===" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $catMenuSorted.Count; $i++) {
+        $c = $catMenuSorted[$i]
+        $tokStr = ($c.Tokens -join "+")
+        Write-Host ("[{0}] {1,-8} : {2,4} 件  (token:{3})" -f ($i+1), $c.Label, $c.Count, $tokStr) -ForegroundColor Gray
+    }
+    Write-Host "[0] 手入力（Wordを直接入力）" -ForegroundColor Yellow
+
+    $sel = Read-Host ("番号を入力してください (0?{0} / カンマ区切り可 / Enterでスキップ)" -f $catMenuSorted.Count)
+
+    if (-not [string]::IsNullOrWhiteSpace($sel)) {
+
+        # ★ StrictMode 対策：必ず配列化
+        $parts = @(
+            $sel.Split(",") |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -match '^\d+$' }
+        )
+
+        if ($parts.Count -gt 0) {
+
+            $pickedGroups = @()
+            $pickedLabels = @()
+
+            foreach ($p in $parts) {
+                $num = [int]$p
+
+                if ($num -eq 0) {
+                    $manual = Read-Host "Word を入力してください（複数可: 空白区切り）"
+                    if (-not [string]::IsNullOrWhiteSpace($manual)) {
+                        $manualWords = @($manual.Split() | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+                        if ($manualWords.Count -gt 0) {
+                            # 手入力は「そのWordsをAND」扱い（カテゴリと同じ“group”として扱う）
+                            $pickedGroups += ,([string[]]$manualWords)
+                            $pickedLabels += ("手入力:" + ($manualWords -join "+"))
+                        }
+                    }
+                }
+                elseif ($num -ge 1 -and $num -le $catMenuSorted.Count) {
+                    $c = $catMenuSorted[$num - 1]
+                    $pickedGroups += ,([string[]]$c.Tokens)  # ★ グループとして保持
+                    $pickedLabels += $c.Label
+                }
+            }
+
+            # 選択結果を反映（1つなら従来MustContainでもOKだが、統一してGroupsで扱う）
+            if ($pickedGroups.Count -gt 0) {
+
+                $MustContainGroups = @($pickedGroups)
+
+                # 従来のMustContainは空に（Groupsが優先される）
+                $MustContain = @()
+                $Word = $null
+
+                Write-Host ("選択されたカテゴリ: {0}" -f ($pickedLabels -join ", ")) -ForegroundColor Green
+                Write-Host ("抽出条件: （カテゴリ内 token AND）を（カテゴリ間 OR）" ) -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    Write-Host ""
+}
+
+# ======== MustContain の最終決定（カテゴリ選択が無い場合のみ） ========
+if (($MustContainGroups.Count -eq 0) -and (-not $PSBoundParameters.ContainsKey('MustContain')) -and (-not $MustContain -or $MustContain.Count -eq 0)) {
+    if (-not [string]::IsNullOrWhiteSpace($Word)) {
+        $MustContain = @($Word)
+    }
+    else {
+        if (-not [string]::IsNullOrWhiteSpace($Mode) -and $ModeToken.ContainsKey($Mode)) {
+            $MustContain = $ModeToken[$Mode]
+        } else {
+            $MustContain = @()  # 条件なし（全件対象）
+        }
+    }
+}
+
 # ===== ログ（モード・パス） =====
 Write-Host ("=== Mode: {0} / UseModeFolder: {1} / Recurse: {2} ===" -f $Mode, $UseModeFolder.IsPresent, $Recurse.IsPresent) -ForegroundColor Cyan
 Write-Host ("=== src: {0}" -f $src) -ForegroundColor DarkCyan
-Write-Host ("=== Map[{0}]: {1}" -f $Mode, $Map[$Mode]) -ForegroundColor DarkGray
-Write-Host ("=== MustContain: {0}" -f ($MustContain -join ",")) -ForegroundColor DarkGray
 Write-Host ("=== MustNotContain: {0}" -f ($MustNotContain -join ",")) -ForegroundColor DarkGray
-Write-Host ("=== MustContain条件: {0}" -f ($(if($UseOrMustContain){"OR"}else{"AND"}))) -ForegroundColor DarkGray
+
+if ($MustContainGroups.Count -gt 0) {
+    $gStr = @()
+    foreach ($g in $MustContainGroups) { $gStr += ("(" + (($g -join "+")) + ")") }
+    Write-Host ("=== MustContainGroups: {0}" -f ($gStr -join " OR ")) -ForegroundColor DarkGray
+} else {
+    Write-Host ("=== MustContain: {0}" -f ($MustContain -join ",")) -ForegroundColor DarkGray
+}
 
 # ===== 対象フォルダのファイル数を表示 =====
-if (-not (Test-Path -LiteralPath $src)) { throw "元ディレクトリが見つかりません: $src" }
-
 $allToday = if ($Recurse) {
     Get-ChildItem -LiteralPath $src -File -Recurse
 } else {
     Get-ChildItem -LiteralPath $src -File
 }
-
 Write-Host ("=== 対象フォルダ内のファイル数: {0} 件 ===" -f $allToday.Count) -ForegroundColor Cyan
 
-# ===== 抽出（MustContain AND/OR / MustNotContain NOT） =====
+# ===== 抽出（カテゴリGroups優先 / MustContain AND / MustNotContain NOT） =====
 $srcFiles = $allToday | Where-Object {
     $name = $_.Name
-    $matchContain = if ($UseOrMustContain) {
-        Matches-AnyTokens -name $name -tokens $MustContain
+
+    $matchContain = if ($MustContainGroups.Count -gt 0) {
+        Matches-AnyTokenGroup -name $name -groups $MustContainGroups
     } else {
         Matches-AllTokens -name $name -tokens $MustContain
     }
+
     $matchContain -and (Matches-NoneTokens -name $name -tokens $MustNotContain)
 }
 
@@ -363,7 +405,6 @@ $thPct = [Math]::Round($Threshold*100,0)
 Write-Host ("=== 類似判定しきい値: {0}% ===" -f $thPct) -ForegroundColor DarkCyan
 
 $copied=0; $skipped=0; $movedToDone=0; $idx=0
-# ★ コピーしたファイルの一覧
 $copiedFiles = @()
 
 foreach ($srcFile in $randomFiles) {
@@ -375,7 +416,6 @@ foreach ($srcFile in $randomFiles) {
 
     Write-Host ("[{0}/{1}] チェック中: {2}" -f $idx, $pickCount, $srcFile.FullName) -ForegroundColor DarkCyan
 
-    # ===== best探索（候補を絞ってから距離計算） =====
     $bestSim=0.0; $best=$null
 
     $k = if ($srcNorm.Length -ge 2) { $srcNorm.Substring(0,2) } else { $srcNorm }
@@ -402,7 +442,6 @@ foreach ($srcFile in $randomFiles) {
         if ($bestSim -ge 1.0) { break }
     }
 
-    # ===== short条件 =====
     $srcHasShort  = ($srcName -match '(?i)short')
     $bestHasShort = ($best -and $best.Name -match '(?i)short')
     $xorShort     = ($srcHasShort -xor $bestHasShort)
@@ -415,18 +454,15 @@ foreach ($srcFile in $randomFiles) {
     }
 
     try {
-        # 片側のみ short かつ 類似度高い → コピー
         if ($best -and $xorShort -and (($bestSim -ge $Threshold) -or ($simNoShort -ge $Threshold))) {
             Write-Host ("  → 'short' 片側一致：コピー（類似:{0:F1}% / 相手:{1} [{2}]）" -f ($bestSim*100), $best.Name, $best.Source) -ForegroundColor Green
             Copy-Item -LiteralPath $srcFile.FullName -Destination $dest -Force -WhatIf:$WhatIf
             $copied++
-            # ★ コピー先パスを記録
             $copiedFiles += (Join-Path $dest $srcFile.Name)
             Show-StepTime $swOne $swAll
             continue
         }
 
-        # 類似しきい値以上 → done に移動
         if ($best -and $bestSim -ge $Threshold) {
             $moved = Safe-MoveToDone -srcFile $srcFile -doneDir $done -WhatIf:$WhatIf
             Write-Host ("  → SKIP: 類似 {0:F1}% / 相手:{1} [{2}] → done: {3}" -f ($bestSim*100), $best.Name, $best.Source, $moved) -ForegroundColor Yellow
@@ -435,7 +471,6 @@ foreach ($srcFile in $randomFiles) {
             continue
         }
 
-        # short 除去後の類似が高い → done に移動
         if ($best -and $simNoShort -ge $Threshold) {
             $moved = Safe-MoveToDone -srcFile $srcFile -doneDir $done -WhatIf:$WhatIf
             Write-Host ("  → SKIP: short除去類似 {0:F1}% / 相手:{1} [{2}] → done: {3}" -f ($simNoShort*100), $best.Name, $best.Source, $moved) -ForegroundColor Yellow
@@ -444,11 +479,9 @@ foreach ($srcFile in $randomFiles) {
             continue
         }
 
-        # 類似なし → コピー
         Copy-Item -LiteralPath $srcFile.FullName -Destination $dest -Force -WhatIf:$WhatIf
         Write-Host "  → 類似ファイルなし。コピーしました。" -ForegroundColor Green
         $copied++
-        # ★ コピー先パスを記録
         $copiedFiles += (Join-Path $dest $srcFile.Name)
         Show-StepTime $swOne $swAll
     }
@@ -460,12 +493,9 @@ foreach ($srcFile in $randomFiles) {
 
 Write-Host ""
 
-# ★ 最後に、コピーしたファイル一覧を表示
 if ($copiedFiles.Count -gt 0) {
     Write-Host "=== コピーしたファイル一覧 ===" -ForegroundColor Green
-    foreach ($p in $copiedFiles) {
-        Write-Host ("  " + $p) -ForegroundColor Gray
-    }
+    foreach ($p in $copiedFiles) { Write-Host ("  " + $p) -ForegroundColor Gray }
 } else {
     Write-Host "コピーされたファイルはありません。" -ForegroundColor Yellow
 }
@@ -476,7 +506,6 @@ Write-Host ("  コピー             : {0} 件" -f $copied) -ForegroundColor Green
 Write-Host ("  スキップ（done移動）: {0} 件（類似≧{1}%）" -f $skipped, $thPct) -ForegroundColor Yellow
 Write-Host ("    → 実際に移動した : {0} 件" -f $movedToDone) -ForegroundColor Yellow
 
-# 第1部の累計表示（秒 + mm:ss）
 $allSecMid = $swAll.Elapsed.TotalSeconds
 $allTSMid  = [TimeSpan]::FromSeconds($allSecMid)
 Write-Host ("=== 第1部 累計: {0:N1}s ({1:mm\:ss}) ===" -f $allSecMid, $allTSMid) -ForegroundColor Cyan
@@ -485,7 +514,6 @@ Write-Host ("=== 第1部 累計: {0:N1}s ({1:mm\:ss}) ===" -f $allSecMid, $allTSMid)
 
 $ErrorActionPreference = 'Stop'
 
-# ★ Count エラー対策：必ず配列化
 $files = @(Get-ChildItem -File -Filter *.txt)
 if (-not $files) {
     Write-Host "対象ファイル (*.txt) が見つかりません。"
@@ -503,7 +531,6 @@ for ($i = 0; $i -lt $total; $i++) {
     $f        = $files[$i]
     $nameOrig = $f.Name
 
-    # 正規化 + 置換チェーン（1行）
     $nameNew = ($nameOrig.Normalize([System.Text.NormalizationForm]::FormKC) `
         -replace '　','' `
         -replace ' ','_' `
@@ -519,7 +546,6 @@ for ($i = 0; $i -lt $total; $i++) {
         -replace '^_+|_+$','' `
         -replace '、','')
 
-    # 進捗（100%到達）
     $percent = [int]((($i + 1) / [double]$total) * 100)
     $status  = "{0}/{1} 処理中: {2}" -f ($i+1), $total, $nameOrig
     Write-Progress -Activity "ファイル名リネーム中" -Status $status -PercentComplete $percent
@@ -570,8 +596,6 @@ Write-Host ("対象        : {0} 件" -f $total)
 Write-Host ("リネーム    : {0} 件" -f $renamed)
 Write-Host ("衝突回避    : {0} 件" -f $conflicted)
 Write-Host ("変更なし    : {0} 件" -f $skipRename)
-
-./cp-joyuu.ps1
 
 # ===== 全体タイマー終了（秒 + mm:ss）=====
 $swAll.Stop()
