@@ -12,7 +12,7 @@
 param(
     [ValidateSet(
         'genpatsu','huudo','joyuu','kasyu','marx','sakka','rakugo','shinjuku',
-        'tekiya','yakuza','yoshiwara','cyber','kankyou','gijutsu','short'
+        'tekiya','yakuza','yoshiwara','cyber','kankyou','gijutsu','short','akatsuka'
     )]
     [string]$Mode = '',
 
@@ -60,6 +60,7 @@ $Map = @{
     kankyou   = Join-Path $BaseToday '環境'
     gijutsu   = Join-Path $BaseToday '技術'
     short     = Join-Path $BaseToday 'short'
+    akatsuka  = Join-Path $BaseToday '赤塚'
 }
 
 # ======== Mode -> 既定 token（MustContain 未指定のときだけ使う） ========
@@ -78,6 +79,7 @@ $ModeToken = @{
     cyber     = @('サイバー')
     kankyou   = @('環境')
     gijutsu   = @('技術')
+　　akatsuka  = @('赤塚')
 }
 
 if (-not $PSBoundParameters.ContainsKey('MustContain')) {

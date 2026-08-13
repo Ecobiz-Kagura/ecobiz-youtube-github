@@ -111,7 +111,7 @@ function Confirm-AndDeleteMp4InCwd {
   param([int]$timeoutSec = 10)
 
   $cwd0 = (Get-Location).Path
-  $mp4s = Get-ChildItem -LiteralPath $cwd0 -File -Filter "*.mp4" -ErrorAction SilentlyContinue
+  $mp4s = @(Get-ChildItem -LiteralPath $cwd0 -File -Filter "*.mp4" -ErrorAction SilentlyContinue)
 
   if(-not $mp4s -or $mp4s.Count -eq 0){
     Write-Host "カレントに mp4 はありません: $cwd0"
@@ -423,6 +423,38 @@ try{
 } catch {
   Write-Host "短縮SRTの生成に失敗したため、元SRTを使用します。"
 }
+
+#################################
+
+$source = "D:\ecobiz-images"
+$destination = "D:\ecobiz-youtube-github"
+
+$latestMp4 = Get-ChildItem -Path $source -Filter "*.mp4" -File |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if ($null -eq $latestMp4) {
+    Write-Error "MP4ファイルが見つかりません: $source"
+    exit 1
+}
+
+if (-not (Test-Path $destination)) {
+    New-Item -Path $destination -ItemType Directory -Force | Out-Null
+}
+
+Copy-Item -Path $latestMp4.FullName `
+          -Destination $destination `
+          -Force
+
+Write-Host "コピー完了:"
+Write-Host "コピー元: $($latestMp4.FullName)"
+Write-Host "コピー先: $destination"
+Write-Host "更新日時: $($latestMp4.LastWriteTime)"
+
+cd D:\ecobiz-youtube-github
+
+################################
+
 
 # ------------------------------------------------------------
 # 3) overlay 作成（背景 = “今回作成された最新mp4”）

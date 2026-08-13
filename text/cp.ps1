@@ -1,15 +1,51 @@
-
 # ============================
-# 原発フォルダからランダム取得 → カレントへコピー（完全版）
+# 指定フォルダ(Type)からランダム取得 → カレントへコピー（完全版）
 # - 直下のみ（非再帰）
 # - ファイル名を正規化（行継続 ` は一切使わない）
 # - 同名衝突は (1)(2)... で回避
 # - StrictMode 最新でも落ちない（Get-Random -Count 1 を配列化）
+# - Type 引数で Source ディレクトリ切替（#1-#14 コメント番号付き）
 # ============================
 
-$Source      = 'C:\Users\user\OneDrive\＊【エコビズ】\地域'
+param(
+    [ValidateSet(
+        "genpatsu","huudo","joyuu","kasyu","marx","sakka","rakugo","shinjuku",
+        "tekiya","yakuza","yoshiwara","cyber","kankyou","gijutsu", "akatsuka", "oiran"
+    )]
+    [string]$Type = "joyuu",
+
+    [int]$Count = 1
+)
+
+$Base = 'C:\Users\user\OneDrive\＊【エコビズ】'
+
+# --- Type → フォルダマッピング（cp-*.ps1 の番号に合わせる）---
+$Map = @{
+    genpatsu  = Join-Path $Base '原発'        # 1  ./cp-genpatsu.ps1
+    huudo     = Join-Path $Base '風土'        # 2  ./cp-huudo.ps1
+    joyuu     = Join-Path $Base '女優'        # 3  ./cp-joyuu.ps1
+    kasyu     = Join-Path $Base '歌手'        # 4  ./cp-kasyu.ps1
+    marx      = Join-Path $Base 'マルクス'    # 5  ./cp-marx.ps1
+    sakka     = Join-Path $Base '作家'        # 6  ./cp-sakka.ps1
+    rakugo    = Join-Path $Base '落語'        # 7  ./cp-rakugo.ps1
+    shinjuku  = Join-Path $Base '新宿'        # 8  ./cp-shinjuku.ps1
+    tekiya    = Join-Path $Base 'テキヤ'      # 9  ./cp-tekiya.ps1
+    yakuza    = Join-Path $Base 'やくざ'      # 10 ./cp-yakuza.ps1
+    yoshiwara = Join-Path $Base '吉原花魁'    # 11 ./cp-yoshiwara.ps1
+    cyber     = Join-Path $Base 'サイバー'    # 12 ./cp-cyber.ps1
+    kankyou   = Join-Path $Base '環境'        # 13 ./cp-kankyou.ps1
+    gijutsu   = Join-Path $Base '技術'        # 14 ./cp-gijutsu.ps1
+    akatsuka  = Join-Path $Base '赤塚'        # 15 ./cp-gijutsu.ps1
+    oiran     = Join-Path $Base '吉原花魁'    # 16 ./cp-gijutsu.ps1
+}
+
+if (-not $Map.ContainsKey($Type)) {
+    Write-Error "未知の Type です: $Type"
+    exit 1
+}
+
+$Source      = $Map[$Type]
 $Destination = (Get-Location).Path
-$Count       = 1  # ←ここを 1 / 2 / 45 などに変更
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -82,7 +118,7 @@ function Resolve-NameConflict([string]$dir, [string]$fileName) {
 # --- 直下のみ（非再帰）---
 $all = Get-ChildItem -LiteralPath $Source -File
 if (-not $all -or $all.Count -eq 0) {
-    Write-Host "対象ファイルがありません。"
+    Write-Host "対象ファイルがありません。Source=$Source"
     exit 0
 }
 
@@ -92,6 +128,12 @@ $pick = @($all | Get-Random -Count $k)
 
 $i = 0
 $total = $pick.Count
+
+Write-Host ("Type={0}" -f $Type)
+Write-Host ("Source={0}" -f $Source)
+Write-Host ("Destination={0}" -f $Destination)
+Write-Host ("Count(request)={0} / Count(actual)={1}" -f $Count, $total)
+Write-Host ""
 
 foreach ($f in $pick) {
     $i++
