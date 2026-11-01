@@ -8,25 +8,12 @@
 # 作成した動画をWhisperで文字起こしする
 #
 # 完成したテキストは
-#
-# 1.
-# C:\Users\user\OneDrive\＊【エコビズ】\【whisper】
-#
-# 2.
-# C:\Users\user\OneDrive\＊【エコビズ】\【whisper】\
-#     実行しているディレクトリと同じ名前のフォルダ
-#
+#   1. C:\Users\user\OneDrive\＊【エコビズ】\【whisper】
+#   2. C:\Users\user\OneDrive\＊【エコビズ】\【whisper】\saved
 # の両方に保存する
 #
-# 例:
-# D:\動画\赤塚 で実行した場合
-#
-# C:\Users\user\OneDrive\＊【エコビズ】\【whisper】\赤塚
-#
-# にもTXTを保存する
-#
 # 【whisper】直下の既存ファイルは開始時に削除する
-# 実行ディレクトリ名の保存フォルダ内は削除しない
+# savedフォルダ内のファイルは削除しない
 #
 # Y/N確認では10秒以内に入力がない場合、自動的にYを選択する
 # YまたはNの入力時にEnterキーは不要
@@ -34,10 +21,7 @@
 $ErrorActionPreference = "Stop"
 
 
-# ============================================================
-# 設定
-# ============================================================
-
+# ===== 設定 =====
 $ClipCount = 20
 $MinSeconds = 60
 $MaxSeconds = 90
@@ -53,39 +37,16 @@ $WhisperModel = "medium"
 
 $ConfirmTimeoutSeconds = 10
 
-
-# ============================================================
-# Whisper基本保存先
-# ============================================================
-
 # ＊は全角文字
 $textDestination = "C:\Users\user\OneDrive\＊【エコビズ】\【whisper】"
 
-
-# ============================================================
-# 現在の実行ディレクトリを取得
-# ============================================================
-
-$currentDirectory = (Get-Location).Path
-
-$currentDirectoryName = Split-Path `
-    -Leaf `
-    $currentDirectory
-
-
-# ============================================================
-# 実行ディレクトリと同じ名前の保存先
-# ============================================================
-
-$archiveDestination = Join-Path `
+# 過去の文字起こしを保存するフォルダ
+$savedDestination = Join-Path `
     $textDestination `
-    $currentDirectoryName
+    "saved"
 
 
-# ============================================================
-# Y/N確認関数
-# ============================================================
-
+# ===== Y/N確認関数 =====
 function Read-YesNoWithTimeout {
 
     param (
@@ -97,25 +58,20 @@ function Read-YesNoWithTimeout {
         [string]$DefaultAnswer = "Y"
     )
 
-
     Write-Host ""
     Write-Host "$Message [Y/N]"
     Write-Host "$TimeoutSeconds秒以内に入力がなければ、自動的に$DefaultAnswerを選択します。"
     Write-Host "YまたはNを押してください。Enterキーは不要です。"
     Write-Host ""
 
-
     # 以前のキー入力が残っている場合は消去
     try {
 
         while ([Console]::KeyAvailable) {
-
-            [Console]::ReadKey($true) |
-                Out-Null
+            [Console]::ReadKey($true) | Out-Null
         }
 
     } catch {
-
         # キー入力状態を取得できない環境ではそのまま続行
     }
 
@@ -129,7 +85,6 @@ function Read-YesNoWithTimeout {
         Write-Host `
             "`r残り $remaining 秒: " `
             -NoNewline
-
 
         $oneSecondLater = (Get-Date).AddSeconds(1)
 
@@ -173,8 +128,7 @@ function Read-YesNoWithTimeout {
             }
 
 
-            Start-Sleep `
-                -Milliseconds 100
+            Start-Sleep -Milliseconds 100
         }
     }
 
@@ -186,38 +140,18 @@ function Read-YesNoWithTimeout {
 }
 
 
-# ============================================================
-# 保存先を表示
-# ============================================================
-
-Write-Host ""
-Write-Host "============================================================"
-Write-Host "実行ディレクトリ:"
-Write-Host $currentDirectory
-
-Write-Host ""
-Write-Host "実行ディレクトリ名:"
-Write-Host $currentDirectoryName
-
+# ===== Whisper保存先を表示 =====
 Write-Host ""
 Write-Host "Whisperテキスト保存先:"
 Write-Host $textDestination
 
 Write-Host ""
-Write-Host "保存用コピー先:"
-Write-Host $archiveDestination
-
-Write-Host "============================================================"
+Write-Host "saved保存先:"
+Write-Host $savedDestination
 
 
-# ============================================================
-# Whisper基本保存先を作成
-# ============================================================
-
-if (-not (
-    Test-Path `
-        -LiteralPath $textDestination
-)) {
+# ===== Whisper保存先を作成 =====
+if (-not (Test-Path -LiteralPath $textDestination)) {
 
     New-Item `
         -ItemType Directory `
@@ -225,51 +159,29 @@ if (-not (
         -Force |
         Out-Null
 
-
     Write-Host ""
-    Write-Host "Whisper保存先フォルダを作成しました:"
-    Write-Host $textDestination
+    Write-Host "Whisper保存先フォルダを作成しました。"
 }
 
 
-# ============================================================
-# 実行ディレクトリ名の保存フォルダを作成
-# ============================================================
-
-if (-not (
-    Test-Path `
-        -LiteralPath $archiveDestination
-)) {
+# ===== savedフォルダを作成 =====
+if (-not (Test-Path -LiteralPath $savedDestination)) {
 
     New-Item `
         -ItemType Directory `
-        -Path $archiveDestination `
+        -Path $savedDestination `
         -Force |
         Out-Null
 
-
-    Write-Host ""
-    Write-Host "保存用フォルダを作成しました:"
-    Write-Host $archiveDestination
-
-} else {
-
-    Write-Host ""
-    Write-Host "保存用フォルダは既に存在します:"
-    Write-Host $archiveDestination
+    Write-Host "savedフォルダを作成しました。"
 }
 
 
-# ============================================================
-# Whisper保存先の削除確認
-# ============================================================
-
+# ===== Whisper保存先の削除確認 =====
 Write-Host ""
 Write-Host "注意:"
 Write-Host "【whisper】直下の既存ファイルだけを削除します。"
-Write-Host ""
-Write-Host "次の保存用フォルダ内は削除しません:"
-Write-Host $archiveDestination
+Write-Host "savedフォルダ内のファイルは削除しません。"
 
 
 $deleteAnswer = Read-YesNoWithTimeout `
@@ -280,7 +192,6 @@ $deleteAnswer = Read-YesNoWithTimeout `
 
 if ($deleteAnswer -match '^[Yy]$') {
 
-    # -Fileだけなのでサブディレクトリは削除しない
     $existingFiles = @(
         Get-ChildItem `
             -LiteralPath $textDestination `
@@ -292,9 +203,7 @@ if ($deleteAnswer -match '^[Yy]$') {
     if ($existingFiles.Count -gt 0) {
 
         $existingFiles |
-            Remove-Item `
-                -Force
-
+            Remove-Item -Force
 
         Write-Host ""
         Write-Host "$($existingFiles.Count)個の既存ファイルを削除しました。"
@@ -314,61 +223,46 @@ if ($deleteAnswer -match '^[Yy]$') {
 }
 
 
-# ============================================================
-# ffmpeg確認
-# ============================================================
-
+# ===== ffmpeg確認 =====
 if (-not (
     Get-Command `
         ffmpeg `
         -ErrorAction SilentlyContinue
 )) {
 
-    Write-Host ""
     Write-Host "ffmpegが見つかりません。"
 
     exit
 }
 
 
-# ============================================================
-# ffprobe確認
-# ============================================================
-
+# ===== ffprobe確認 =====
 if (-not (
     Get-Command `
         ffprobe `
         -ErrorAction SilentlyContinue
 )) {
 
-    Write-Host ""
     Write-Host "ffprobeが見つかりません。"
 
     exit
 }
 
 
-# ============================================================
-# Python確認
-# ============================================================
-
+# ===== Python確認 =====
 if (-not (
     Get-Command `
         python `
         -ErrorAction SilentlyContinue
 )) {
 
-    Write-Host ""
     Write-Host "pythonが見つかりません。"
 
     exit
 }
 
 
-# ============================================================
-# Whisper確認
-# ============================================================
-
+# ===== Whisper確認 =====
 & python `
     -c `
     "import whisper" `
@@ -390,13 +284,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 
-# ============================================================
-# 対象動画を取得
-# ============================================================
-
-$inputVideo = Get-ChildItem `
-    -LiteralPath $currentDirectory `
-    -File |
+# ===== 対象動画を取得 =====
+$inputVideo = Get-ChildItem -File |
     Where-Object {
 
         $_.Extension -match `
@@ -419,19 +308,13 @@ if (-not $inputVideo) {
 }
 
 
-# ============================================================
-# 出力フォルダ
-# ============================================================
-
+# ===== 出力フォルダ =====
 $outDir = Join-Path `
-    $currentDirectory `
+    (Get-Location) `
     $OutputDirName
 
 
-if (
-    Test-Path `
-        -LiteralPath $outDir
-) {
+if (Test-Path -LiteralPath $outDir) {
 
     Add-Type `
         -AssemblyName Microsoft.VisualBasic
@@ -455,10 +338,7 @@ New-Item `
     Out-Null
 
 
-# ============================================================
-# 動画時間を取得
-# ============================================================
-
+# ===== 動画時間を取得 =====
 $durationText = & ffprobe `
     -v error `
     -show_entries format=duration `
@@ -507,10 +387,7 @@ Write-Host $outDir
 Write-Host "============================================================"
 
 
-# ============================================================
-# ランダム切り出しと縦画面上下配置
-# ============================================================
-
+# ===== ランダム切り出しと縦画面上下配置 =====
 for (
     $i = 1;
     $i -le $ClipCount;
@@ -563,10 +440,7 @@ for (
     Write-Host ""
     Write-Host "------------------------------------------------------------"
     Write-Host "動画 $i / $ClipCount"
-    Write-Host "作成中:"
-    Write-Host $outName
-
-    Write-Host ""
+    Write-Host "作成中: $outName"
     Write-Host "開始位置: $start秒"
     Write-Host "長さ: $clipLength秒"
 
@@ -614,10 +488,7 @@ for (
 }
 
 
-# ============================================================
-# 作成動画の一覧を取得
-# ============================================================
-
+# ===== 作成動画の一覧を取得 =====
 $createdVideos = @(
     Get-ChildItem `
         -LiteralPath $outDir `
@@ -636,10 +507,7 @@ if ($createdVideos.Count -eq 0) {
 }
 
 
-# ============================================================
-# Whisperによる文字起こし
-# ============================================================
-
+# ===== Whisperによる文字起こし =====
 Write-Host ""
 Write-Host "============================================================"
 Write-Host "Whisperによる文字起こしを開始します。"
@@ -723,10 +591,7 @@ foreach ($videoFile in $createdVideos) {
 }
 
 
-# ============================================================
-# 完成したテキストファイルを取得
-# ============================================================
-
+# ===== 完成したテキストファイルを取得 =====
 $textFiles = @(
     Get-ChildItem `
         -LiteralPath $outDir `
@@ -742,38 +607,28 @@ Write-Host "文字起こし結果を保存します。"
 Write-Host "============================================================"
 
 
-# ============================================================
-# テキストを2か所へ保存
-# ============================================================
-
 if ($textFiles.Count -gt 0) {
 
     foreach ($textFile in $textFiles) {
 
-        # ----------------------------------------------------
-        # 実行ディレクトリ名のフォルダへコピー
-        # ----------------------------------------------------
-
-        $archiveFile = Join-Path `
-            $archiveDestination `
+        # ===== savedフォルダへコピー =====
+        $savedFile = Join-Path `
+            $savedDestination `
             $textFile.Name
 
 
         Copy-Item `
             -LiteralPath $textFile.FullName `
-            -Destination $archiveFile `
+            -Destination $savedFile `
             -Force
 
 
         Write-Host ""
-        Write-Host "保存用フォルダへコピーしました:"
-        Write-Host $archiveFile
+        Write-Host "savedへコピーしました:"
+        Write-Host $textFile.Name
 
 
-        # ----------------------------------------------------
-        # Whisper直下へ移動
-        # ----------------------------------------------------
-
+        # ===== Whisper直下へ移動 =====
         $destinationFile = Join-Path `
             $textDestination `
             $textFile.Name
@@ -785,30 +640,22 @@ if ($textFiles.Count -gt 0) {
             -Force
 
 
-        Write-Host ""
         Write-Host "Whisperフォルダへ移動しました:"
-        Write-Host $destinationFile
+        Write-Host $textFile.Name
     }
 
 } else {
 
     Write-Host ""
-    Write-Host "保存対象のテキストファイルはありませんでした。"
+    Write-Host "移動・コピー対象のテキストファイルはありませんでした。"
 }
 
 
-# ============================================================
-# 完了表示
-# ============================================================
-
+# ===== 完了表示 =====
 Write-Host ""
 Write-Host "============================================================"
 Write-Host "すべての処理が完了しました。"
 Write-Host "============================================================"
-
-Write-Host ""
-Write-Host "入力動画:"
-Write-Host $inputVideo.Name
 
 Write-Host ""
 Write-Host "動画の出力先:"
@@ -819,8 +666,8 @@ Write-Host "今回のテキスト保存先:"
 Write-Host $textDestination
 
 Write-Host ""
-Write-Host "保存用コピー先:"
-Write-Host $archiveDestination
+Write-Host "テキストの保存用コピー先:"
+Write-Host $savedDestination
 
 Write-Host ""
 Write-Host "作成動画数:"
