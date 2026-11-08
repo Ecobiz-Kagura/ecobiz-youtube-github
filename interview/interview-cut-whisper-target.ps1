@@ -16,7 +16,7 @@ $scriptStartTime = Get-Date
 # ê›íË
 # ============================================================
 
-$ClipCount = 40
+$ClipCount = 20
 $MinSeconds = 60
 $MaxSeconds = 90
 
