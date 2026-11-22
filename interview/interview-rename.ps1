@@ -11,9 +11,7 @@
 # CSV形式（ヘッダーなし）:
 #   タイトル,元TXTまたはMP4ファイル名
 #
-# 例:
-#   新宿の夜,IMG_0661_vertical_01_71s_start619s.mp4
-#   東京の文化,IMG_0661_vertical_02_80s_start978s.txt
+# Prefix / Suffix は対話形式で入力
 
 param(
     [switch]$Execute
@@ -73,7 +71,8 @@ while ($true) {
     )
 
     if (-not $valid) {
-        Write-Host "数字を入力してください。" -ForegroundColor Yellow
+        Write-Host "数字を入力してください。" `
+            -ForegroundColor Yellow
         continue
     }
 
@@ -94,13 +93,16 @@ while ($true) {
 $videoDir = $dirs[$selectedNumber - 1].FullName
 
 Write-Host ""
-Write-Host "選択ディレクトリ: $videoDir" -ForegroundColor Cyan
+Write-Host "選択ディレクトリ: $videoDir" `
+    -ForegroundColor Cyan
 
 # ============================================
-# 2. Prefix入力
+# 2. Prefix入力（先頭文字列）
 # ============================================
 
 $Prefix = ""
+
+Write-Host ""
 
 while ($true) {
 
@@ -113,7 +115,7 @@ while ($true) {
         while ($true) {
 
             $Prefix = (
-                Read-Host "追加する文字列"
+                Read-Host "先頭に追加する文字列"
             ).Trim()
 
             if (-not [string]::IsNullOrWhiteSpace($Prefix)) {
@@ -136,19 +138,67 @@ while ($true) {
         -ForegroundColor Yellow
 }
 
-# 禁止文字を置換
+# ============================================
+# 3. Suffix入力（末尾文字列）
+# ============================================
+
+$Suffix = ""
+
+Write-Host ""
+
+while ($true) {
+
+    $answer = (
+        Read-Host "ファイル名の末尾に文字列を追加しますか？ (Y/N)"
+    ).Trim()
+
+    if ($answer -match '^(y|yes)$') {
+
+        while ($true) {
+
+            $Suffix = (
+                Read-Host "末尾に追加する文字列"
+            ).Trim()
+
+            if (-not [string]::IsNullOrWhiteSpace($Suffix)) {
+                break
+            }
+
+            Write-Host "空欄は指定できません。" `
+                -ForegroundColor Yellow
+        }
+
+        break
+    }
+
+    if ($answer -match '^(n|no)$') {
+        $Suffix = ""
+        break
+    }
+
+    Write-Host "Y または N を入力してください。" `
+        -ForegroundColor Yellow
+}
+
+# ============================================
+# 4. Prefix・Suffixの禁止文字を置換
+# ============================================
+
 $Prefix = $Prefix -replace '[\\/:*?"<>|\x00-\x1F]', '-'
+$Suffix = $Suffix -replace '[\\/:*?"<>|\x00-\x1F]', '-'
 
 Write-Host ""
 Write-Host "使用Prefix: [$Prefix]" -ForegroundColor Cyan
+Write-Host "使用Suffix: [$Suffix]" -ForegroundColor Cyan
 
 # ============================================
-# 3. 最新CSVを自動選択
+# 5. 最新CSVを自動選択
 # ============================================
 
 # 選択したディレクトリ直下を優先
 $csvFiles = @(
-    Get-ChildItem -LiteralPath $videoDir -File -Filter '*.csv' |
+    Get-ChildItem -LiteralPath $videoDir `
+        -File -Filter '*.csv' |
         Sort-Object LastWriteTime -Descending
 )
 
@@ -156,7 +206,8 @@ $csvFiles = @(
 if ($csvFiles.Count -eq 0) {
 
     $csvFiles = @(
-        Get-ChildItem -LiteralPath $base -File -Filter '*.csv' |
+        Get-ChildItem -LiteralPath $base `
+            -File -Filter '*.csv' |
             Sort-Object LastWriteTime -Descending
     )
 }
@@ -177,10 +228,11 @@ if ($csvFiles.Count -eq 0) {
 
 $CsvPath = $csvFiles[0].FullName
 
+Write-Host ""
 Write-Host "使用CSV: $CsvPath" -ForegroundColor Cyan
 
 # ============================================
-# 4. CSV読み込み
+# 6. CSV読み込み
 # ============================================
 
 # 1列目: タイトル
@@ -199,7 +251,7 @@ if ($rows.Count -eq 0) {
 Write-Host "CSV行数: $($rows.Count)"
 
 # ============================================
-# 5. MP4一覧取得
+# 7. MP4一覧取得
 # ============================================
 
 $videos = @(
@@ -214,7 +266,7 @@ if ($videos.Count -eq 0) {
 Write-Host "検出MP4数: $($videos.Count)"
 
 # ============================================
-# 6. リネーム計画作成
+# 8. リネーム計画作成
 # ============================================
 
 $plans = @()
@@ -276,8 +328,11 @@ foreach ($row in $rows) {
         throw "CSV $lineNumber 行目: 使用可能なタイトルがありません。"
     }
 
-    # Prefix + タイトル + 拡張子
-    $newName = "$Prefix$safeTitle.mp4"
+    # ========================================
+    # Prefix + タイトル + Suffix + 拡張子
+    # ========================================
+
+    $newName = "$Prefix$safeTitle$Suffix.mp4"
 
     # ファイル名の末尾の空白・ピリオドを除去
     $newName = (
@@ -318,7 +373,7 @@ foreach ($row in $rows) {
 }
 
 # ============================================
-# 7. リネーム予定一覧
+# 9. リネーム予定一覧
 # ============================================
 
 Write-Host ""
@@ -333,11 +388,12 @@ Write-Host ""
 Write-Host "選択フォルダ: $videoDir"
 Write-Host "使用CSV: $CsvPath"
 Write-Host "Prefix: [$Prefix]"
+Write-Host "Suffix: [$Suffix]"
 Write-Host "対象件数: $($plans.Count)"
 Write-Host ""
 
 # ============================================
-# 8. 確認モード
+# 10. 確認モード
 # ============================================
 
 if (-not $Execute) {
@@ -347,6 +403,7 @@ if (-not $Execute) {
 
     Write-Host ""
     Write-Host "実行するには次のコマンドを使用してください。"
+
     Write-Host ".\Rename-InterviewVideos-CSV.ps1 -Execute" `
         -ForegroundColor Cyan
 
@@ -354,34 +411,50 @@ if (-not $Execute) {
 }
 
 # ============================================
-# 9. 実行モードの最終確認
+# 11. 実行モードの最終確認
 # ============================================
 
-$confirm = (
-    Read-Host "上記のファイル名に変更しますか？ (Y/N)"
-).Trim()
+while ($true) {
 
-if ($confirm -notmatch '^(y|yes)$') {
+    $confirm = (
+        Read-Host "上記のファイル名に変更しますか？ (Y/N)"
+    ).Trim()
 
-    Write-Host "キャンセルしました。ファイルは変更していません。" `
+    if ($confirm -match '^(y|yes)$') {
+        break
+    }
+
+    if ($confirm -match '^(n|no)$') {
+
+        Write-Host "キャンセルしました。ファイルは変更していません。" `
+            -ForegroundColor Yellow
+
+        return
+    }
+
+    Write-Host "Y または N を入力してください。" `
         -ForegroundColor Yellow
-
-    return
 }
 
 # ============================================
-# 10. リネーム実行
+# 12. リネーム実行
 # ============================================
 
 $completed = 0
 $skipped = 0
 $failed = 0
 
+Write-Host ""
+Write-Host "=========================================="
+Write-Host " リネーム処理開始"
+Write-Host "=========================================="
+
 foreach ($item in $plans) {
 
     if ($item.OldName -ceq $item.NewName) {
 
         Write-Host "変更不要: $($item.NewName)"
+
         $skipped++
         continue
     }
@@ -402,8 +475,9 @@ foreach ($item in $plans) {
 
         $completed++
 
-        Write-Host ("[{0}] {1} -> {2}" -f `
-            $completed, $item.OldName, $item.NewName) `
+        Write-Host ("[{0}/{1}] {2} -> {3}" -f `
+            $item.No, $plans.Count, `
+            $item.OldName, $item.NewName) `
             -ForegroundColor Green
     }
     catch {
@@ -413,12 +487,13 @@ foreach ($item in $plans) {
         Write-Host "変更失敗: $($item.OldName)" `
             -ForegroundColor Red
 
-        Write-Host $_.Exception.Message -ForegroundColor Red
+        Write-Host $_.Exception.Message `
+            -ForegroundColor Red
     }
 }
 
 # ============================================
-# 11. 結果表示
+# 13. 結果表示
 # ============================================
 
 Write-Host ""
@@ -429,15 +504,19 @@ Write-Host "=========================================="
 Write-Host "選択フォルダ: $videoDir"
 Write-Host "使用CSV: $CsvPath"
 Write-Host "Prefix: [$Prefix]"
+Write-Host "Suffix: [$Suffix]"
 Write-Host "対象件数: $($plans.Count)"
 Write-Host "変更成功: $completed"
 Write-Host "変更不要: $skipped"
 Write-Host "変更失敗: $failed"
 
 if ($failed -eq 0) {
-    Write-Host "処理が完了しました。" -ForegroundColor Green
+    Write-Host "処理が完了しました。" `
+        -ForegroundColor Green
 }
 else {
     Write-Host "一部のリネームに失敗しました。" `
         -ForegroundColor Yellow
 }
+
+Write-Host ""
