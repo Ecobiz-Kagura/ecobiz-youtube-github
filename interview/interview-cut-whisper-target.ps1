@@ -265,6 +265,8 @@ if (-not (
 # Whisper直下の既存ファイル削除確認
 # ============================================================
 
+rm .\vertical_random_clips\*
+
 Write-Host ""
 Write-Host "注意:"
 Write-Host "【whisper】直下の既存ファイルだけを削除します。"
